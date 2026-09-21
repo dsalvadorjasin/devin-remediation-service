@@ -46,6 +46,7 @@ class Task(Base):
 
     __tablename__ = "tasks"
 
+    repository: Mapped[str] = mapped_column(String, primary_key=True)
     issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String, default="")
     issue_url: Mapped[str] = mapped_column(String, default="")

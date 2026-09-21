@@ -18,6 +18,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "tasks",
+        sa.Column("repository", sa.String(), primary_key=True),
         sa.Column("issue_number", sa.Integer(), primary_key=True),
         sa.Column("title", sa.String(), nullable=False, server_default=""),
         sa.Column("issue_url", sa.String(), nullable=False, server_default=""),

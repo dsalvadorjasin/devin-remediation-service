@@ -23,9 +23,10 @@ class Orchestrator(ABC):
         self,
         issue_number: int,
         session_id: str,
+        poll_token: str,
         delay_seconds: int = POLL_INTERVAL_SECONDS,
-        poll_token: str | None = None,
     ) -> None:
         """Check a running Devin session after `delay_seconds`; the poll re-schedules
-        itself until the session reaches completed/failed. `poll_token` identifies
-        the owning poll chain (see store.claim_poll) so superseded chains stop."""
+        itself until the session reaches completed/failed. `poll_token` is the
+        chain's lease token from store.claim_poll; only the owning chain polls,
+        so superseded chains stop."""

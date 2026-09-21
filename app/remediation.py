@@ -55,9 +55,7 @@ def _publish_poll(issue_number: int, session_id: str, delay_seconds: int, poll_t
     """Schedule the next hop of a chain; on broker failure give the lease back
     so the next reconciliation scan can re-arm immediately."""
     try:
-        get_orchestrator().schedule_poll(
-            issue_number, session_id, delay_seconds, poll_token=poll_token
-        )
+        get_orchestrator().schedule_poll(issue_number, session_id, poll_token, delay_seconds)
     except Exception as exc:
         log.error("Could not schedule poll for issue #%d: %s", issue_number, exc)
         store.release_poll(issue_number, poll_token=poll_token)
@@ -162,16 +160,14 @@ def scan_and_process(force_retry: bool = False) -> dict:
     return {"scanned": len(issues), "polls_rearmed": rearmed}
 
 
-def poll_session_once(
-    issue_number: int, session_id: str, poll_token: str | None = None
-) -> bool:
-    """``poll_token`` identifies the calling chain; a poll without one (or with
-    a superseded one) is never the owner and stops."""
+def poll_session_once(issue_number: int, session_id: str, poll_token: str) -> bool:
     """
     Fetch the latest state of one Devin session, map it to the internal status
     model, and update the store. If Devin's response doesn't include a PR URL
     yet, fall back to searching GitHub directly. A PR that exists while Devin
     is still "running" counts as completed.
+
+    ``poll_token`` is the calling chain's lease token; a superseded chain stops.
 
     Returns True if the session is still running and should be polled again.
     """
@@ -179,9 +175,8 @@ def poll_session_once(
     if not entry or entry["status"] != "running" or entry["session_id"] != session_id:
         # Superseded (retried, completed elsewhere, or cleared) — stop polling.
         return False
-    if poll_token is None or entry["poll_token"] != poll_token:
-        # Not the owning chain (tokenless or lease re-claimed) — stop; the
-        # reconciliation scan re-arms polling if nobody owns it.
+    if entry["poll_token"] != poll_token:
+        # Lease re-claimed by another chain — stop.
         return False
     try:
         data = devin.get_session(session_id)
@@ -210,6 +205,6 @@ def poll_session_once(
         new_status = "completed"
     store.upsert(issue_number, status=new_status, pr_url=pr_url)
     if new_status != "running":
-        store.release_poll(issue_number)
+        store.release_poll(issue_number, poll_token=poll_token)
         return False
     return True

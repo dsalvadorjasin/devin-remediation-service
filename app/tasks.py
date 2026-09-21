@@ -26,9 +26,7 @@ def remediate_issue_task(issue: dict, force_retry: bool = False) -> bool:
 
 
 @celery_app.task(name="app.tasks.poll_session_task")
-def poll_session_task(
-    issue_number: int, session_id: str, poll_token: str | None = None
-) -> bool:
+def poll_session_task(issue_number: int, session_id: str, poll_token: str) -> bool:
     """Poll a running session once; re-queue itself while it is still running.
 
     Kept as a self-rescheduling task (rather than a loop) so a Temporal

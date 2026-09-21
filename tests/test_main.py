@@ -397,20 +397,26 @@ def test_poll_session_stops_when_superseded(monkeypatch, scheduled_polls):
     called = []
     monkeypatch.setattr(devin, "get_session", lambda session_id: called.append(session_id))
 
-    assert tasks.poll_session_task.apply(kwargs={"issue_number": 14, "session_id": "sess-old"}).get() is False
+    assert tasks.poll_session_task.apply(
+        kwargs={"issue_number": 14, "session_id": "sess-old", "poll_token": _own(14, "sess-new")}
+    ).get() is False
     assert called == []
 
 
-def test_poll_session_without_token_stops_without_polling(monkeypatch, scheduled_polls):
-    """Polls that carry no token are never owners; the reconciliation scan re-arms them."""
+def test_terminal_poll_release_leaves_newer_owner(monkeypatch, scheduled_polls):
+    """A chain finishing after its lease was re-claimed must not clear the new owner."""
     store.upsert(18, title="Fix bug", issue_url="u", session_id="sess-18", status="running")
-    called = []
-    monkeypatch.setattr(devin, "get_session", lambda session_id: called.append(session_id))
+    old = _own(18, "sess-18")
+    new = store.claim_poll(18, "sess-18", lease_seconds=180, only_if_lost=False)
+    assert new is not None and new != old
+    monkeypatch.setattr(devin, "get_session", lambda session_id: {"status": "exit", "pull_requests": []})
+    monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
-    assert tasks.poll_session_task.apply(kwargs={"issue_number": 18, "session_id": "sess-18"}).get() is False
-    assert called == []
-    assert scheduled_polls == []
-    assert store.get_unpolled_running()[0]["issue_number"] == 18
+    assert remediation.poll_session_once(18, "sess-18", old) is False
+    assert store.get(18)["poll_token"] == new
+    assert remediation.poll_session_once(18, "sess-18", new) is False
+    assert store.get(18)["status"] == "completed"
+    assert store.get(18)["poll_token"] is None
 
 
 def test_arm_poll_releases_lease_when_scheduling_fails(monkeypatch):

@@ -20,8 +20,8 @@ class CeleryOrchestrator(Orchestrator):
         self,
         issue_number: int,
         session_id: str,
+        poll_token: str,
         delay_seconds: int = POLL_INTERVAL_SECONDS,
-        poll_token: str | None = None,
     ) -> None:
         from app import tasks
 

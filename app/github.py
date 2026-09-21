@@ -89,3 +89,58 @@ def post_comment(issue_number: int, body: str) -> None:
     with httpx.Client() as client:
         resp = client.post(url, headers=_headers(), json={"body": body})
         resp.raise_for_status()
+
+
+def get_issue(issue_number: int) -> dict:
+    url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}"
+    with httpx.Client() as client:
+        resp = client.get(url, headers=_headers())
+        resp.raise_for_status()
+    return resp.json()
+
+
+def add_labels(issue_number: int, labels: list[str]) -> None:
+    url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/labels"
+    with httpx.Client() as client:
+        resp = client.post(url, headers=_headers(), json={"labels": labels})
+        resp.raise_for_status()
+
+
+# --- webhooks (Webhooks: read/write) ---------------------------------------
+
+
+def list_webhooks() -> list[dict]:
+    url = f"{GITHUB_API}/repos/{_repo()}/hooks"
+    with httpx.Client() as client:
+        resp = client.get(url, headers=_headers(), params={"per_page": 100})
+        resp.raise_for_status()
+    return resp.json()
+
+
+def create_webhook(payload_url: str, secret: str, events: list[str] | None = None) -> dict:
+    """Register a repository webhook pointing at `payload_url`.
+    https://docs.github.com/en/rest/repos/webhooks#create-a-repository-webhook
+    """
+    url = f"{GITHUB_API}/repos/{_repo()}/hooks"
+    body = {
+        "name": "web",
+        "active": True,
+        "events": events or ["issues", "pull_request"],
+        "config": {
+            "url": payload_url,
+            "content_type": "json",
+            "secret": secret,
+            "insecure_ssl": "0",
+        },
+    }
+    with httpx.Client() as client:
+        resp = client.post(url, headers=_headers(), json=body)
+        resp.raise_for_status()
+    return resp.json()
+
+
+def delete_webhook(hook_id: int) -> None:
+    url = f"{GITHUB_API}/repos/{_repo()}/hooks/{hook_id}"
+    with httpx.Client() as client:
+        resp = client.delete(url, headers=_headers())
+        resp.raise_for_status()

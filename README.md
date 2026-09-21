@@ -7,11 +7,12 @@ An event-driven automation that scans a GitHub repository for issues labelled `d
 1. On startup, the API enqueues a scan of the GitHub repo for open issues with the `devin-remediate` label. Scans run on a Celery worker.
 2. For each issue, a `remediate_issue_task` checks for an existing open PR before creating a Devin session, so restarting the service never triggers duplicate work.
 3. If no open PR exists, a Devin session is created with a structured prompt to fix the issue and open a PR.
-4. Celery Beat repeats the scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
-5. Each running session is tracked by a `poll_session_task` that re-queues itself every 60 seconds (`apply_async(countdown=60)`) until the session finishes. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
-6. Poll ownership is durable: each chain holds a `poll_token` and a `poll_lease_until` lease on the task row, renewed on every hop. The periodic scan re-arms polling for any `running` session whose lease is missing or expired (worker restart, lost broker message, sessions created before Celery), claiming the lease atomically so concurrent scans never start duplicate chains; a poll carrying a superseded token stops itself.
-7. A live dashboard at `http://localhost:8000` shows the status of all tasks.
-8. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
+4. When a GitHub webhook is registered, `POST /webhooks/github` reacts immediately to `issues` (labelled `devin-remediate`) and `pull_request` events, enqueueing remediation or updating task state.
+5. Celery Beat repeats the scan every `SCAN_INTERVAL_MINUTES` as a **reconciliation scan**: it re-lists labelled issues and reconciles the store against GitHub's live state, so missed webhook deliveries (or no webhook at all) never drop work.
+6. Each running session is tracked by a `poll_session_task` that re-queues itself every 60 seconds (`apply_async(countdown=60)`) until the session finishes. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
+7. Poll ownership is durable: each chain holds a `poll_token` and a `poll_lease_until` lease on the task row, renewed on every hop. The reconciliation scan re-arms polling for any `running` session whose lease is missing or expired (worker restart, lost broker message, sessions created before Celery), claiming the lease atomically so concurrent scans never start duplicate chains; a poll carrying a superseded token stops itself.
+8. A live dashboard at `http://localhost:8000` shows the status of all tasks.
+9. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
 
 ## Quick start
 
@@ -33,6 +34,7 @@ DATABASE_URL=postgresql+psycopg://remediation:remediation@postgres:5432/remediat
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
 ORCHESTRATOR=celery
+GITHUB_WEBHOOK_SECRET=your_webhook_secret_here
 ```
 
 - `GITHUB_TOKEN` — fine-grained personal access token scoped to the target repository. Full permission footprint:
@@ -44,6 +46,7 @@ ORCHESTRATOR=celery
 - `DATABASE_URL` — SQLAlchemy connection string. The default in `.env.example` points at the `postgres` service in `docker-compose.yml`. If unset, the app falls back to a local SQLite file (`sqlite:///./remediation.db`), which is what the unit tests use (in-memory).
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis URLs used by Celery. Defaults point at the `redis` service in `docker-compose.yml`.
 - `ORCHESTRATOR` — which `Orchestrator` implementation dispatches work. Only `celery` exists today.
+- `GITHUB_WEBHOOK_SECRET` — self-generated shared secret for HMAC (`X-Hub-Signature-256`) verification of webhook deliveries. If unset, `POST /webhooks/github` returns 503 and the service runs on the reconciliation scan alone.
 - `DEVIN_API_KEY` — API key for Devin (starts with `cog_`), which you can generate following the instructions [here](https://docs.devin.ai/api-reference/getting-started/teams-quickstart#step-2-generate-an-api-key).
 - `DEVIN_ORG_ID` - Organization ID for Devin (starts with `org-`), which you can find under `Settings -> General` in [app.devin.ai](app.devin.ai).
 
@@ -115,7 +118,26 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 
 **Persistent storage.** `app/store.py` keeps the original function signatures (`upsert`, `get`, `get_all`, `get_status`, `clear`) but is backed by a `tasks` table (`app/db.py`). On startup the service still re-scans GitHub and treats the live PR state as the source of truth, so a stale database never blocks work.
 
-**Polling over webhooks.** Rather than using a GitHub webhook, the service polls on a configurable interval. This avoids the need for a public endpoint and makes local development and Docker deployment straightforward with no external infrastructure. In a production deployment, a webhook could be added so that the service is notified immediately when an issue is labelled, but the polling approach is simpler and sufficient for a demo/local deployment.
+**Webhooks for immediacy, reconciliation scan for eventual consistency.** `app/webhooks.py` verifies the HMAC signature and normalizes `issues` / `pull_request` events into idempotent store updates and orchestrator calls:
+
+| Event | Effect |
+|---|---|
+| `issues` `labeled`/`opened`/`reopened` with `devin-remediate` | `enqueue_remediation(issue)` (same guards as the scan) |
+| `issues` `edited` on a tracked issue | update title / URL |
+| `pull_request` `opened`/`reopened` referencing `#N` | tracked `#N` -> `completed` with `pr_url` |
+| `pull_request` `closed` unmerged, matching the tracked `pr_url` | re-fetch issue; if still open + labelled -> `failed` and `enqueue_remediation(force_retry=True)` |
+
+Webhook deliveries are best-effort, so the Phase 2 Beat scan is kept as a reconciliation pass. The whole discover -> issue -> session -> PR loop works with no webhook registered.
+
+**Runtime webhook registration.** The public URL is only known once a tunnel is up, so hooks are registered at runtime (Webhooks: read/write scope):
+
+```bash
+# no account needed for a Cloudflare quick tunnel
+cloudflared tunnel --url http://localhost:8000   # prints https://<random>.trycloudflare.com
+uv run python scripts/webhook.py register https://<random>.trycloudflare.com
+uv run python scripts/webhook.py list
+uv run python scripts/webhook.py delete --all-service   # tunnel is ephemeral: always clean up
+```
 
 **Celery behind a swappable orchestrator.** All background work (scans, per-issue remediation, per-session polling) runs as Celery tasks (`app/tasks.py`) on Redis. The API never talks to Celery directly: it calls `app.orchestrator.get_orchestrator()`, which returns an implementation of the abstract `Orchestrator` interface (`enqueue_scan`, `enqueue_remediation`, `schedule_poll`). `CeleryOrchestrator` is the only implementation today; a future `TemporalOrchestrator` can implement the same three methods (with a durable timer replacing the self-re-queuing poll task) without touching routes or the `app/devin.py` / `app/github.py` clients. Business logic lives in `app/remediation.py` and is scheduler-agnostic.
 
@@ -131,13 +153,15 @@ app/
 │   ├── base.py                 # Abstract Orchestrator interface
 │   ├── celery_orchestrator.py  # CeleryOrchestrator (ORCHESTRATOR=celery)
 │   └── __init__.py             # get_orchestrator() factory
-├── github.py       # GitHub API client
+├── webhooks.py     # HMAC verification + issues/pull_request event normalization
+├── github.py       # GitHub API client (issues, PRs, comments, webhooks)
 ├── devin.py        # Devin API client
 ├── store.py        # Persistent task store (same API as the old in-memory store)
 ├── db.py           # SQLAlchemy engine/session + Task model
 └── templates/
     └── index.html  # Dashboard
 alembic/            # Database migrations
+scripts/webhook.py  # register / list / delete the repo webhook at runtime
 alembic.ini
 Dockerfile
 docker-compose.yml

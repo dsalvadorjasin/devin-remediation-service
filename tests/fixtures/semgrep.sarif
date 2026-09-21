@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.139.0",
+          "rules": [
+            {
+              "id": "python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use",
+              "name": "dangerous-subprocess-use",
+              "shortDescription": {"text": "Detected subprocess function with user input"},
+              "helpUri": "https://semgrep.dev/r/python.lang.security.audit.dangerous-subprocess-use",
+              "defaultConfiguration": {"level": "error"},
+              "properties": {"security-severity": "high", "tags": ["security"]}
+            },
+            {
+              "id": "python.lang.best-practice.open-never-closed.open-never-closed",
+              "name": "open-never-closed",
+              "shortDescription": {"text": "file object opened without corresponding close"},
+              "defaultConfiguration": {"level": "warning"},
+              "properties": {"tags": ["best-practice"]}
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use",
+          "level": "error",
+          "message": {"text": "Detected subprocess function 'run' with shell=True and user-controlled input."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "superset/utils/shell.py", "uriBaseId": "%SRCROOT%"},
+                "region": {
+                  "startLine": 42,
+                  "startColumn": 5,
+                  "endLine": 42,
+                  "endColumn": 60,
+                  "snippet": {"text": "    subprocess.run(cmd, shell=True)"}
+                }
+              }
+            }
+          ],
+          "fingerprints": {"matchBasedId/v1": "abcdef0123456789abcdef0123456789abcdef01"}
+        },
+        {
+          "ruleId": "python.lang.best-practice.open-never-closed.open-never-closed",
+          "level": "warning",
+          "message": {"text": "file object opened without corresponding close"},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "superset/utils/files.py"},
+                "region": {
+                  "startLine": 7,
+                  "snippet": {"text": "fh = open(path)"}
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

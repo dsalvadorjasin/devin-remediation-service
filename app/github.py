@@ -106,6 +106,48 @@ def add_labels(issue_number: int, labels: list[str]) -> None:
         resp.raise_for_status()
 
 
+def create_issue(title: str, body: str, labels: list[str] | None = None) -> dict:
+    """Create an issue (Issues: write). Defaults to the remediation label."""
+    url = f"{GITHUB_API}/repos/{_repo()}/issues"
+    payload = {"title": title, "body": body, "labels": labels if labels is not None else [LABEL]}
+    with httpx.Client() as client:
+        resp = client.post(url, headers=_headers(), json=payload)
+        resp.raise_for_status()
+    return resp.json()
+
+
+def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-fingerprint") -> dict[str, dict]:
+    """Map fingerprint -> open issue whose body contains
+    `<!-- {marker}: {fingerprint} -->`. One paginated listing of open labelled
+    issues, then a local scan, so a batch of N findings costs O(pages) calls."""
+    wanted = set(fingerprints)
+    found: dict[str, dict] = {}
+    if not wanted:
+        return found
+    url = f"{GITHUB_API}/repos/{_repo()}/issues"
+    page = 1
+    with httpx.Client() as client:
+        while True:
+            resp = client.get(
+                url,
+                headers=_headers(),
+                params={"labels": LABEL, "state": "open", "per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            issues = resp.json()
+            for issue in issues:
+                if "pull_request" in issue:
+                    continue
+                body = issue.get("body") or ""
+                for fp in wanted:
+                    if f"<!-- {marker}: {fp} -->" in body:
+                        found[fp] = issue
+            if len(issues) < 100:
+                break
+            page += 1
+    return found
+
+
 # --- webhooks (Webhooks: read/write) ---------------------------------------
 
 

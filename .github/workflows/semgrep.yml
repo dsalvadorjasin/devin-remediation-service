@@ -1,0 +1,63 @@
+# Host-free alternative to the Celery Beat discovery task: run Semgrep on the
+# TARGET repository in GitHub Actions and push the SARIF to the remediation
+# service, which files a `devin-remediate` issue for every new fingerprint.
+#
+# Copy this workflow into the target repo (e.g. dsalvadorjasin/superset) or
+# keep it here and set TARGET_REPO. Requires two repository secrets:
+#   REMEDIATION_INGEST_URL   e.g. https://remediation.example.com/ingest/semgrep
+#   REMEDIATION_INGEST_TOKEN the service's INGEST_TOKEN
+# and, when scanning another repository from here, a token with Contents: read
+# on it as TARGET_REPO_TOKEN.
+name: semgrep-discovery
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/repo to scan (defaults to this repository)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Only report what would be filed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo || vars.TARGET_REPO || github.repository }}
+          token: ${{ secrets.TARGET_REPO_TOKEN || github.token }}
+          fetch-depth: 1
+
+      - name: Run Semgrep (SARIF)
+        run: semgrep scan --config p/default --sarif --output semgrep.sarif --metrics=off || true
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+
+      - name: POST SARIF to remediation service
+        if: ${{ secrets.REMEDIATION_INGEST_URL != '' }}
+        env:
+          INGEST_URL: ${{ secrets.REMEDIATION_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.REMEDIATION_INGEST_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          curl --fail-with-body -sS -X POST \
+            "${INGEST_URL}?dry_run=${DRY_RUN:-false}" \
+            -H "Authorization: Bearer ${INGEST_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @semgrep.sarif

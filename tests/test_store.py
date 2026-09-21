@@ -84,3 +84,17 @@ def test_clear_empties_the_store():
     store.clear()
 
     assert store.get_all() == []
+
+
+def test_repository_switch_does_not_reuse_task_state(monkeypatch):
+    store.upsert(1, title="A", issue_url="https://example.com/issues/1", status="failed")
+
+    monkeypatch.setenv("GITHUB_REPO", "other-org/other-repo")
+
+    assert store.get_status(1) is None
+    other = store.upsert(1, title="B", issue_url="https://example.com/issues/1")
+    assert other["title"] == "B"
+    assert other["status"] == "running"
+
+    monkeypatch.setenv("GITHUB_REPO", "test-org/test-repo")
+    assert store.get_status(1) == "failed"

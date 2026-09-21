@@ -1,16 +1,17 @@
 """
-In-memory store for tracking GitHub issues, their associated Devin sessions,
-and processing statuses. All mutations are guarded by a threading lock to
-prevent race conditions between the background polling and scanning tasks,
-which run concurrently and both write to the store.
+Persistent store for tracking GitHub issues, their associated Devin sessions,
+and processing statuses, backed by SQLAlchemy (PostgreSQL in production,
+SQLite fallback for tests/local runs). The public function signatures are
+unchanged from the original in-memory implementation.
 """
 
-import threading
-from datetime import datetime, timezone
+import os
 
-_lock = threading.Lock()
+from sqlalchemy import select
 
-# Schema per store entry:
+from app.db import SessionLocal, Task, utcnow
+
+# Schema per store entry (see app.db.Task.to_dict):
 # {
 #   "issue_number": int,
 #   "title": str,
@@ -23,60 +24,63 @@ _lock = threading.Lock()
 #   "updated_at": str (ISO),
 # }
 
-_store: dict[int, dict] = {}  # in-memory store keyed by issue number
+_MUTABLE_FIELDS = {"title", "issue_url", "session_id", "session_url", "status", "pr_url"}
 
 
-def _now() -> str:
-    """Return the current UTC time as an ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+def _repository() -> str:
+    return os.environ["GITHUB_REPO"]
 
 
 def upsert(issue_number: int, **kwargs) -> dict:
     """Insert a new entry or update an existing one for the given issue number."""
-    with _lock:
-        if issue_number not in _store:
-            _store[issue_number] = {
-                "issue_number": issue_number,
-                "title": kwargs.get("title", ""),
-                "issue_url": kwargs.get("issue_url", ""),
-                "session_id": None,
-                "session_url": None,
-                "status": "running",
-                "pr_url": None,
-                "created_at": _now(),
-                "updated_at": _now(),
-            }
-        entry = _store[issue_number]
+    repository = _repository()
+    with SessionLocal() as session:
+        task = session.get(Task, (repository, issue_number))
+        if task is None:
+            task = Task(
+                repository=repository,
+                issue_number=issue_number,
+                title=kwargs.get("title") or "",
+                issue_url=kwargs.get("issue_url") or "",
+                status="running",
+            )
+            session.add(task)
         for k, v in kwargs.items():
-            if k in entry and v is not None:
-                entry[k] = v
-        entry["updated_at"] = _now()
-        return dict(entry)
+            if k in _MUTABLE_FIELDS and v is not None:
+                setattr(task, k, v)
+        task.updated_at = utcnow()
+        session.commit()
+        session.refresh(task)
+        return task.to_dict()
 
 
 def get(issue_number: int) -> dict | None:
     """Retrieve the entry for the given issue number."""
-    with _lock:
-        entry = _store.get(issue_number)
-        return dict(entry) if entry else None
+    with SessionLocal() as session:
+        task = session.get(Task, (_repository(), issue_number))
+        return task.to_dict() if task else None
 
 
 def clear() -> None:
-    """Remove all entries from the store."""
-    with _lock:
-        _store.clear()
+    """Remove all entries for the configured repository from the store."""
+    with SessionLocal() as session:
+        session.query(Task).filter(Task.repository == _repository()).delete()
+        session.commit()
 
 
 def get_all() -> list:
-    """Return a list of all entries in the store, sorted by issue number."""
-    with _lock:
-        return [
-            dict(v) for v in sorted(_store.values(), key=lambda x: x["issue_number"])
-        ]
+    """Return entries for the configured repository, sorted by issue number."""
+    with SessionLocal() as session:
+        tasks = session.scalars(
+            select(Task)
+            .where(Task.repository == _repository())
+            .order_by(Task.issue_number)
+        ).all()
+        return [t.to_dict() for t in tasks]
 
 
 def get_status(issue_number: int) -> str | None:
     """Return the current status of the given issue number."""
-    with _lock:
-        entry = _store.get(issue_number)
-        return entry["status"] if entry else None
+    with SessionLocal() as session:
+        task = session.get(Task, (_repository(), issue_number))
+        return task.status if task else None

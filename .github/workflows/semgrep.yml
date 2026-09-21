@@ -50,12 +50,15 @@ jobs:
           path: semgrep.sarif
 
       - name: POST SARIF to remediation service
-        if: ${{ secrets.REMEDIATION_INGEST_URL != '' }}
         env:
           INGEST_URL: ${{ secrets.REMEDIATION_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.REMEDIATION_INGEST_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          if [ -z "${INGEST_URL}" ]; then
+            echo "REMEDIATION_INGEST_URL not set; skipping POST"
+            exit 0
+          fi
           curl --fail-with-body -sS -X POST \
             "${INGEST_URL}?dry_run=${DRY_RUN:-false}" \
             -H "Authorization: Bearer ${INGEST_TOKEN}" \

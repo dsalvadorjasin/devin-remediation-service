@@ -1,38 +1,73 @@
+# Service topology (all app containers are built from the same image):
+#
+#   api            FastAPI ingest/API + dashboard        (:8000)  never calls Devin
+#   ingest-worker  celery -Q ingest   scan_task, discovery_task (GitHub, Semgrep)
+#   devin-worker   celery -Q devin    remediate_issue_task, poll_session_task
+#   beat           celery beat        reconciliation scan + Semgrep discovery schedule
+#   redis          Celery broker / result backend
+#   postgres       task state
+#
+# Scale independently, e.g. `docker compose up --scale devin-worker=3`.
+
+x-app: &app
+  build: .
+  env_file:
+    - .env
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
-  app:
-    build: .
+  migrate:
+    <<: *app
+    command: uv run alembic upgrade head
+    restart: "no"
+
+  api:
+    <<: *app
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 6
 
-  worker:
-    build: .
-    command: uv run celery -A app.celery_app:celery_app worker --loglevel=info --concurrency=2
-    env_file:
-      - .env
+  ingest-worker:
+    <<: *app
+    command: uv run celery -A app.celery_app:celery_app worker -Q ingest -n ingest@%h --loglevel=info --concurrency=2
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    volumes:
+      - semgrep-checkout:/tmp/remediation-checkout
+
+  devin-worker:
+    <<: *app
+    command: uv run celery -A app.celery_app:celery_app worker -Q devin -n devin@%h --loglevel=info --concurrency=4
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   beat:
-    build: .
+    <<: *app
     command: uv run celery -A app.celery_app:celery_app beat --loglevel=info
-    env_file:
-      - .env
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -60,3 +95,4 @@ services:
 
 volumes:
   pgdata:
+  semgrep-checkout:

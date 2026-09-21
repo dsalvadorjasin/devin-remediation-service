@@ -1,0 +1,24 @@
+# Exactly one beat instance: Recreate strategy avoids two schedulers overlapping during rollout.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remediation-beat
+  labels: {app: remediation-beat, tier: scheduler}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: remediation-beat}
+  template:
+    metadata:
+      labels: {app: remediation-beat, tier: scheduler}
+    spec:
+      containers:
+        - name: beat
+          image: devin-remediation-service
+          command: [uv, run, celery, -A, "app.celery_app:celery_app", beat, --loglevel=info]
+          envFrom:
+            - configMapRef: {name: remediation-config}
+            - secretRef: {name: remediation-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}

@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remediation-ingest-worker
+  labels: {app: remediation-ingest-worker, tier: worker}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: remediation-ingest-worker}
+  template:
+    metadata:
+      labels: {app: remediation-ingest-worker, tier: worker}
+    spec:
+      containers:
+        - name: worker
+          image: devin-remediation-service
+          command: [uv, run, celery, -A, "app.celery_app:celery_app", worker, -Q, ingest, -n, "ingest@%h", --loglevel=info, --concurrency=2]
+          envFrom:
+            - configMapRef: {name: remediation-config}
+            - secretRef: {name: remediation-secrets}
+          volumeMounts:
+            - {name: checkout, mountPath: /checkout}
+          livenessProbe:
+            exec:
+              command: [uv, run, celery, -A, "app.celery_app:celery_app", inspect, ping, -d, "ingest@$(HOSTNAME)"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+      volumes:
+        - name: checkout
+          emptyDir: {}

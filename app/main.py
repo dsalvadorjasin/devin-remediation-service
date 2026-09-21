@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 load_dotenv()
 
-from app import devin, github, store
+from app import db, devin, github, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -182,6 +182,7 @@ async def _periodic_scan() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db.init_db()
     log.info("Startup scan...")
     scan_and_process(force_retry=False)
     asyncio.create_task(_periodic_scan())

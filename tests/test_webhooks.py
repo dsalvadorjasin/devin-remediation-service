@@ -171,7 +171,7 @@ def test_reconciliation_scan_still_works_without_webhook(monkeypatch, enqueued):
     """Webhook disabled: the periodic scan must still discover labelled issues."""
     monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
     monkeypatch.setattr(github, "get_labeled_issues", lambda: [_issue(1), _issue(2)])
-    assert remediation.scan_and_process() == {"scanned": 2}
+    assert remediation.scan_and_process() == {"scanned": 2, "polls_rearmed": 0}
     assert enqueued == [(1, False), (2, False)]
 
 

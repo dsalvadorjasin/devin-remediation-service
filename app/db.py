@@ -54,6 +54,10 @@ class Task(Base):
     session_url: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="running")
     pr_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    poll_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    poll_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -66,6 +70,8 @@ class Task(Base):
             "session_url": self.session_url,
             "status": self.status,
             "pr_url": self.pr_url,
+            "poll_token": self.poll_token,
+            "poll_lease_until": _iso(self.poll_lease_until),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

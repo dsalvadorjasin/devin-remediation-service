@@ -37,7 +37,7 @@ def scheduled_polls(monkeypatch):
     real re-queue would execute the poll (and hit the network) immediately."""
     calls: list[tuple[int, str, int]] = []
 
-    def fake_schedule_poll(self, issue_number, session_id, delay_seconds=60):
+    def fake_schedule_poll(self, issue_number, session_id, delay_seconds=60, poll_token=None):
         calls.append((issue_number, session_id, delay_seconds))
 
     monkeypatch.setattr(CeleryOrchestrator, "schedule_poll", fake_schedule_poll)

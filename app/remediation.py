@@ -16,8 +16,42 @@ import logging
 
 from app import devin, github, store
 from app.orchestrator import get_orchestrator
+from app.orchestrator.base import POLL_INTERVAL_SECONDS, POLL_LEASE_GRACE_SECONDS
 
 log = logging.getLogger(__name__)
+
+
+def _lease_seconds(delay_seconds: int) -> int:
+    return delay_seconds + POLL_LEASE_GRACE_SECONDS
+
+
+def arm_poll(
+    issue_number: int,
+    session_id: str,
+    delay_seconds: int = POLL_INTERVAL_SECONDS,
+    only_if_lost: bool = False,
+) -> bool:
+    """Claim poll ownership for a running session in the store, then schedule
+    the first poll of the chain. Returns False if the claim was not granted
+    (another chain already holds a live lease)."""
+    token = store.claim_poll(
+        issue_number, session_id, _lease_seconds(delay_seconds), only_if_lost=only_if_lost
+    )
+    if token is None:
+        return False
+    get_orchestrator().schedule_poll(issue_number, session_id, delay_seconds, poll_token=token)
+    return True
+
+
+def continue_poll(
+    issue_number: int, session_id: str, poll_token: str | None, delay_seconds: int
+) -> None:
+    """Renew the lease held by an existing chain and schedule its next poll."""
+    if poll_token is not None and not store.renew_poll(
+        issue_number, poll_token, _lease_seconds(delay_seconds)
+    ):
+        return
+    get_orchestrator().schedule_poll(issue_number, session_id, delay_seconds, poll_token=poll_token)
 
 
 def process_issue(issue: dict, force_retry: bool = False) -> bool:
@@ -82,7 +116,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
         return False
 
     if session_id:
-        get_orchestrator().schedule_poll(number, session_id)
+        arm_poll(number, session_id)
     return True
 
 
@@ -102,10 +136,24 @@ def scan_and_process(force_retry: bool = False) -> dict:
     for issue in issues:
         orchestrator.enqueue_remediation(issue, force_retry=force_retry)
 
-    return {"scanned": len(issues)}
+    rearmed = 0
+    for entry in store.get_unpolled_running():
+        if arm_poll(
+            entry["issue_number"], entry["session_id"], delay_seconds=0, only_if_lost=True
+        ):
+            rearmed += 1
+            log.info(
+                "Re-armed lost poll for issue #%d (session %s)",
+                entry["issue_number"],
+                entry["session_id"],
+            )
+
+    return {"scanned": len(issues), "polls_rearmed": rearmed}
 
 
-def poll_session_once(issue_number: int, session_id: str) -> bool:
+def poll_session_once(
+    issue_number: int, session_id: str, poll_token: str | None = None
+) -> bool:
     """
     Fetch the latest state of one Devin session, map it to the internal status
     model, and update the store. If Devin's response doesn't include a PR URL
@@ -117,6 +165,9 @@ def poll_session_once(issue_number: int, session_id: str) -> bool:
     entry = store.get(issue_number)
     if not entry or entry["status"] != "running" or entry["session_id"] != session_id:
         # Superseded (retried, completed elsewhere, or cleared) — stop polling.
+        return False
+    if poll_token is not None and entry["poll_token"] != poll_token:
+        # Another chain owns polling for this session (lease was re-claimed).
         return False
     try:
         data = devin.get_session(session_id)
@@ -144,4 +195,7 @@ def poll_session_once(issue_number: int, session_id: str) -> bool:
     if pr_url and new_status == "running":
         new_status = "completed"
     store.upsert(issue_number, status=new_status, pr_url=pr_url)
-    return new_status == "running"
+    if new_status != "running":
+        store.release_poll(issue_number)
+        return False
+    return True

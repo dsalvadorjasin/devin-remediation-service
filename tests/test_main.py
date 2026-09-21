@@ -54,8 +54,44 @@ def test_scan_and_process_enqueues_each_issue(monkeypatch):
 
     result = remediation.scan_and_process()
 
-    assert result == {"scanned": 2}
+    assert result == {"scanned": 2, "polls_rearmed": 0}
     assert processed == [1, 2]
+
+
+def test_scan_rearms_poll_for_running_session_without_lease(monkeypatch, scheduled_polls):
+    """A session persisted as running with no live poll (e.g. created before a
+    worker restart) gets a fresh poll chain from the reconciliation scan."""
+    store.upsert(42, title="Fix bug", issue_url="u", session_id="sess-42", status="running")
+    monkeypatch.setattr(github, "get_labeled_issues", lambda: [])
+
+    result = remediation.scan_and_process()
+
+    assert result == {"scanned": 0, "polls_rearmed": 1}
+    assert scheduled_polls == [(42, "sess-42", 0)]
+    entry = store.get(42)
+    assert entry["poll_token"] is not None
+    assert entry["poll_lease_until"] is not None
+
+
+def test_scan_does_not_rearm_poll_with_live_lease(monkeypatch, scheduled_polls):
+    store.upsert(43, title="Fix bug", issue_url="u", session_id="sess-43", status="running")
+    assert remediation.arm_poll(43, "sess-43") is True
+    scheduled_polls.clear()
+    monkeypatch.setattr(github, "get_labeled_issues", lambda: [])
+
+    result = remediation.scan_and_process()
+    result_again = remediation.scan_and_process()
+
+    assert result == result_again == {"scanned": 0, "polls_rearmed": 0}
+    assert scheduled_polls == []
+
+
+def test_scan_ignores_running_session_without_session_id(monkeypatch, scheduled_polls):
+    store.upsert(44, title="Fix bug", issue_url="u", status="running")
+    monkeypatch.setattr(github, "get_labeled_issues", lambda: [])
+
+    assert remediation.scan_and_process() == {"scanned": 0, "polls_rearmed": 0}
+    assert scheduled_polls == []
 
 
 def test_scan_and_process_reports_github_error(monkeypatch):
@@ -268,6 +304,66 @@ def test_poll_session_requeues_itself_while_running(monkeypatch, scheduled_polls
     assert still_running is True
     assert store.get_status(12) == "running"
     assert scheduled_polls == [(12, "sess-12", 60)]
+
+
+def test_poll_session_with_stale_token_stops_without_polling(monkeypatch, scheduled_polls):
+    store.upsert(15, title="Fix bug", issue_url="u", session_id="sess-15", status="running")
+    assert remediation.arm_poll(15, "sess-15") is True
+    scheduled_polls.clear()
+    called = []
+    monkeypatch.setattr(devin, "get_session", lambda session_id: called.append(session_id))
+
+    still_running = tasks.poll_session_task.apply(
+        kwargs={"issue_number": 15, "session_id": "sess-15", "poll_token": "stale"}
+    ).get()
+
+    assert still_running is False
+    assert called == []
+    assert scheduled_polls == []
+
+
+def test_poll_session_with_current_token_renews_lease(monkeypatch, scheduled_polls):
+    store.upsert(16, title="Fix bug", issue_url="u", session_id="sess-16", status="running")
+    assert remediation.arm_poll(16, "sess-16") is True
+    scheduled_polls.clear()
+    token = store.get(16)["poll_token"]
+    lease_before = store.get(16)["poll_lease_until"]
+    monkeypatch.setattr(
+        devin,
+        "get_session",
+        lambda session_id: {"status": "running", "status_detail": None, "pull_requests": []},
+    )
+    monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
+
+    still_running = tasks.poll_session_task.apply(
+        kwargs={"issue_number": 16, "session_id": "sess-16", "poll_token": token}
+    ).get()
+
+    assert still_running is True
+    assert scheduled_polls == [(16, "sess-16", 60)]
+    assert store.get(16)["poll_token"] == token
+    assert store.get(16)["poll_lease_until"] >= lease_before
+
+
+def test_poll_session_releases_lease_on_completion(monkeypatch, scheduled_polls):
+    store.upsert(17, title="Fix bug", issue_url="u", session_id="sess-17", status="running")
+    assert remediation.arm_poll(17, "sess-17") is True
+    token = store.get(17)["poll_token"]
+    monkeypatch.setattr(
+        devin,
+        "get_session",
+        lambda session_id: {"status": "finished", "status_detail": None, "pull_requests": []},
+    )
+    monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: "https://example.com/pr/17")
+
+    tasks.poll_session_task.apply(
+        kwargs={"issue_number": 17, "session_id": "sess-17", "poll_token": token}
+    ).get()
+
+    entry = store.get(17)
+    assert entry["status"] == "completed"
+    assert entry["poll_token"] is None
+    assert entry["poll_lease_until"] is None
 
 
 def test_poll_session_marks_failed_on_error(monkeypatch, scheduled_polls):

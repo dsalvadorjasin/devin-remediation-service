@@ -9,8 +9,9 @@ An event-driven automation that scans a GitHub repository for issues labelled `d
 3. If no open PR exists, a Devin session is created with a structured prompt to fix the issue and open a PR.
 4. Celery Beat repeats the scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
 5. Each running session is tracked by a `poll_session_task` that re-queues itself every 60 seconds (`apply_async(countdown=60)`) until the session finishes. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
-6. A live dashboard at `http://localhost:8000` shows the status of all tasks.
-7. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
+6. Poll ownership is durable: each chain holds a `poll_token` and a `poll_lease_until` lease on the task row, renewed on every hop. The periodic scan re-arms polling for any `running` session whose lease is missing or expired (worker restart, lost broker message, sessions created before Celery), claiming the lease atomically so concurrent scans never start duplicate chains; a poll carrying a superseded token stops itself.
+7. A live dashboard at `http://localhost:8000` shows the status of all tasks.
+8. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
 
 ## Quick start
 

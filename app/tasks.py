@@ -7,7 +7,6 @@ import logging
 
 from app import remediation
 from app.celery_app import celery_app
-from app.orchestrator import get_orchestrator
 from app.orchestrator.base import POLL_INTERVAL_SECONDS
 
 log = logging.getLogger(__name__)
@@ -27,13 +26,15 @@ def remediate_issue_task(issue: dict, force_retry: bool = False) -> bool:
 
 
 @celery_app.task(name="app.tasks.poll_session_task")
-def poll_session_task(issue_number: int, session_id: str) -> bool:
+def poll_session_task(
+    issue_number: int, session_id: str, poll_token: str | None = None
+) -> bool:
     """Poll a running session once; re-queue itself while it is still running.
 
     Kept as a self-rescheduling task (rather than a loop) so a Temporal
     orchestrator can replace it with a durable timer later.
     """
-    still_running = remediation.poll_session_once(issue_number, session_id)
+    still_running = remediation.poll_session_once(issue_number, session_id, poll_token)
     if still_running:
-        get_orchestrator().schedule_poll(issue_number, session_id, POLL_INTERVAL_SECONDS)
+        remediation.continue_poll(issue_number, session_id, poll_token, POLL_INTERVAL_SECONDS)
     return still_running

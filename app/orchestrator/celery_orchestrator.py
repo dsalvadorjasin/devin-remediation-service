@@ -17,11 +17,19 @@ class CeleryOrchestrator(Orchestrator):
         )
 
     def schedule_poll(
-        self, issue_number: int, session_id: str, delay_seconds: int = POLL_INTERVAL_SECONDS
+        self,
+        issue_number: int,
+        session_id: str,
+        delay_seconds: int = POLL_INTERVAL_SECONDS,
+        poll_token: str | None = None,
     ) -> None:
         from app import tasks
 
         tasks.poll_session_task.apply_async(
-            kwargs={"issue_number": issue_number, "session_id": session_id},
+            kwargs={
+                "issue_number": issue_number,
+                "session_id": session_id,
+                "poll_token": poll_token,
+            },
             countdown=delay_seconds,
         )

@@ -136,14 +136,19 @@ def renew_poll(issue_number: int, poll_token: str, lease_seconds: int) -> bool:
         return result.rowcount == 1
 
 
-def release_poll(issue_number: int) -> None:
-    """Drop poll ownership once a session has reached a terminal status."""
+def release_poll(issue_number: int, poll_token: str | None = None) -> None:
+    """Drop poll ownership (session reached a terminal status, or the chain
+    could not be scheduled). With ``poll_token`` only that chain's lease is
+    released, so a newer owner is left untouched."""
+    stmt = (
+        update(Task)
+        .where(Task.repository == _repository(), Task.issue_number == issue_number)
+        .values(poll_token=None, poll_lease_until=None)
+    )
+    if poll_token is not None:
+        stmt = stmt.where(Task.poll_token == poll_token)
     with SessionLocal() as session:
-        session.execute(
-            update(Task)
-            .where(Task.repository == _repository(), Task.issue_number == issue_number)
-            .values(poll_token=None, poll_lease_until=None)
-        )
+        session.execute(stmt)
         session.commit()
 
 

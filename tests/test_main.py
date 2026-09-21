@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import devin, github, main, remediation, store, tasks
+from app.orchestrator.celery_orchestrator import CeleryOrchestrator
 
 
 def test_dashboard_returns_html():
@@ -229,6 +230,11 @@ def test_process_issue_retries_failed_when_force_retry_true(monkeypatch):
     assert store.get(5)["session_url"] == "https://example.com/sessions/5"
 
 
+def _own(issue_number, session_id):
+    """Give the test's poll chain the lease, as arm_poll does in production."""
+    return store.claim_poll(issue_number, session_id, lease_seconds=180)
+
+
 def test_poll_session_marks_completed_from_devin_exit(monkeypatch, scheduled_polls):
     store.upsert(
         10,
@@ -249,7 +255,9 @@ def test_poll_session_marks_completed_from_devin_exit(monkeypatch, scheduled_pol
     )
     monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
-    still_running = tasks.poll_session_task.apply(kwargs={"issue_number": 10, "session_id": "sess-10"}).get()
+    still_running = tasks.poll_session_task.apply(
+        kwargs={"issue_number": 10, "session_id": "sess-10", "poll_token": _own(10, "sess-10")}
+    ).get()
 
     assert still_running is False
     entry = store.get(10)
@@ -276,7 +284,9 @@ def test_poll_session_marks_completed_from_github_fallback(monkeypatch, schedule
         github, "find_existing_pr", lambda issue_number: "https://example.com/pr/11"
     )
 
-    still_running = tasks.poll_session_task.apply(kwargs={"issue_number": 11, "session_id": "sess-11"}).get()
+    still_running = tasks.poll_session_task.apply(
+        kwargs={"issue_number": 11, "session_id": "sess-11", "poll_token": _own(11, "sess-11")}
+    ).get()
 
     assert still_running is False
     entry = store.get(11)
@@ -299,7 +309,9 @@ def test_poll_session_requeues_itself_while_running(monkeypatch, scheduled_polls
     )
     monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
-    still_running = tasks.poll_session_task.apply(kwargs={"issue_number": 12, "session_id": "sess-12"}).get()
+    still_running = tasks.poll_session_task.apply(
+        kwargs={"issue_number": 12, "session_id": "sess-12", "poll_token": _own(12, "sess-12")}
+    ).get()
 
     assert still_running is True
     assert store.get_status(12) == "running"
@@ -373,7 +385,9 @@ def test_poll_session_marks_failed_on_error(monkeypatch, scheduled_polls):
     )
     monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
-    assert tasks.poll_session_task.apply(kwargs={"issue_number": 13, "session_id": "sess-13"}).get() is False
+    assert tasks.poll_session_task.apply(
+        kwargs={"issue_number": 13, "session_id": "sess-13", "poll_token": _own(13, "sess-13")}
+    ).get() is False
     assert store.get_status(13) == "failed"
     assert scheduled_polls == []
 
@@ -385,3 +399,41 @@ def test_poll_session_stops_when_superseded(monkeypatch, scheduled_polls):
 
     assert tasks.poll_session_task.apply(kwargs={"issue_number": 14, "session_id": "sess-old"}).get() is False
     assert called == []
+
+
+def test_poll_session_without_token_stops_without_polling(monkeypatch, scheduled_polls):
+    """Polls that carry no token are never owners; the reconciliation scan re-arms them."""
+    store.upsert(18, title="Fix bug", issue_url="u", session_id="sess-18", status="running")
+    called = []
+    monkeypatch.setattr(devin, "get_session", lambda session_id: called.append(session_id))
+
+    assert tasks.poll_session_task.apply(kwargs={"issue_number": 18, "session_id": "sess-18"}).get() is False
+    assert called == []
+    assert scheduled_polls == []
+    assert store.get_unpolled_running()[0]["issue_number"] == 18
+
+
+def test_arm_poll_releases_lease_when_scheduling_fails(monkeypatch):
+    """A broker failure must not leave a live lease with no chain behind it."""
+    store.upsert(19, title="Fix bug", issue_url="u", session_id="sess-19", status="running")
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(CeleryOrchestrator, "schedule_poll", boom)
+
+    assert remediation.arm_poll(19, "sess-19") is False
+    entry = store.get(19)
+    assert entry["poll_token"] is None
+    assert entry["poll_lease_until"] is None
+    assert [e["issue_number"] for e in store.get_unpolled_running()] == [19]
+
+
+def test_release_poll_with_token_leaves_newer_owner(monkeypatch, scheduled_polls):
+    store.upsert(20, title="Fix bug", issue_url="u", session_id="sess-20", status="running")
+    old = store.claim_poll(20, "sess-20", lease_seconds=180)
+    new = store.claim_poll(20, "sess-20", lease_seconds=180)
+
+    store.release_poll(20, poll_token=old)
+
+    assert store.get(20)["poll_token"] == new

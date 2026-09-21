@@ -152,6 +152,48 @@ def test_pr_closed_unmerged_requeues_issue(secret, enqueued, monkeypatch):
     assert enqueued == [(7, True)]
 
 
+def test_pr_closed_unmerged_requeues_by_stored_pr_url(secret, enqueued, monkeypatch):
+    """The closing PR's text no longer mentions #7; the stored pr_url still links them."""
+    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(8, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/100")
+    monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
+    client = TestClient(main.app)
+    payload = {
+        "action": "closed",
+        "pull_request": {
+            "html_url": "https://github.com/o/r/pull/99",
+            "state": "closed",
+            "merged": False,
+            "title": "Refactor parser",
+            "body": "",
+        },
+    }
+    resp = _post(client, "pull_request", payload)
+    assert resp.json()["issues"] == [7]
+    assert enqueued == [(7, True)]
+    assert store.get_status(8) == "completed"
+
+
+def test_webhook_rejects_oversized_body(secret, enqueued, monkeypatch):
+    monkeypatch.setattr(webhooks, "MAX_BODY_BYTES", 64)
+    client = TestClient(main.app)
+    payload = {"action": "opened", "issue": _issue(), "padding": "x" * 200}
+    assert _post(client, "issues", payload).status_code == 413
+    assert enqueued == []
+
+
+def test_webhook_requires_content_length(secret):
+    client = TestClient(main.app)
+    body = b"{}"
+    headers = {
+        "X-GitHub-Event": "ping",
+        "X-Hub-Signature-256": _sign(body),
+        "Content-Type": "application/json",
+    }
+    resp = client.post("/webhooks/github", content=iter([body]), headers=headers)
+    assert resp.status_code == 411
+
+
 def test_pr_merged_does_not_requeue(secret, enqueued):
     store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
     client = TestClient(main.app)
@@ -189,3 +231,14 @@ def test_create_and_delete_webhook(httpx_mock):
 
     httpx_mock.add_response(method="DELETE", url="https://api.github.com/repos/test-org/test-repo/hooks/42", status_code=204)
     github.delete_webhook(42)
+
+
+def test_webhook_script_delete_dedupes_ids(monkeypatch):
+    import importlib
+
+    script = importlib.import_module("scripts.webhook")
+    monkeypatch.setattr(github, "list_webhooks", lambda: [{"id": 42, "config": {"url": "https://x/webhooks/github"}}])
+    deleted = []
+    monkeypatch.setattr(github, "delete_webhook", deleted.append)
+    assert script.main(["delete", "42", "--all-service"]) == 0
+    assert deleted == [42]

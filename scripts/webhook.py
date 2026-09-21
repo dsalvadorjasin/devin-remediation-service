@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         ids = [args.hook_id] if args.hook_id else []
         if args.all_service:
             ids += [h["id"] for h in github.list_webhooks() if h["config"].get("url", "").endswith(WEBHOOK_PATH)]
+        ids = list(dict.fromkeys(ids))
         for hid in ids:
             github.delete_webhook(hid)
             print(f"deleted hook {hid}")

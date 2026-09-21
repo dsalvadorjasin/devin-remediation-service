@@ -26,6 +26,8 @@ log = logging.getLogger(__name__)
 SIGNATURE_HEADER = "X-Hub-Signature-256"
 EVENT_HEADER = "X-GitHub-Event"
 DELIVERY_HEADER = "X-GitHub-Delivery"
+# GitHub caps webhook payloads at 25 MB.
+MAX_BODY_BYTES = 25 * 1024 * 1024
 
 _ISSUE_REF = re.compile(r"(?<![A-Za-z0-9/])#(\d+)\b")
 
@@ -99,16 +101,20 @@ def _handle_pull_request(payload: dict) -> dict:
     pr_url = pr.get("html_url")
     touched: list[int] = []
 
-    for number in sorted(referenced_issues(pr)):
-        entry = store.get(number)
-        if not entry:
-            continue
-        if action in ("opened", "reopened", "ready_for_review") and pr.get("state") == "open":
-            store.upsert(number, status="completed", pr_url=pr_url)
-            touched.append(number)
-        elif action == "closed" and not pr.get("merged") and entry.get("pr_url") == pr_url:
-            # PR abandoned: hand the issue back to the guards in process_issue,
-            # which will re-check GitHub and create a fresh session if needed.
+    if action in ("opened", "reopened", "ready_for_review") and pr.get("state") == "open":
+        for number in sorted(referenced_issues(pr)):
+            if store.get(number):
+                store.upsert(number, status="completed", pr_url=pr_url)
+                touched.append(number)
+    elif action == "closed" and not pr.get("merged") and pr_url:
+        # PR abandoned: hand every issue that recorded this PR back to the
+        # guards in process_issue, which re-check GitHub and create a fresh
+        # session if needed. Keyed on the stored pr_url, not the current PR
+        # text, so edits to the PR title/body cannot hide the closure.
+        linked = sorted(
+            e["issue_number"] for e in store.get_all() if e.get("pr_url") == pr_url
+        )
+        for number in linked:
             try:
                 issue = github.get_issue(number)
             except Exception as exc:

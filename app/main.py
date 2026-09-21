@@ -21,6 +21,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 
 load_dotenv()
@@ -88,17 +89,24 @@ async def github_webhook(
     x_hub_signature_256: str | None = Header(default=None),
     x_github_event: str = Header(default=""),
     x_github_delivery: str = Header(default=""),
+    content_length: int | None = Header(default=None),
 ):
     secret = webhooks.webhook_secret()
     if not secret:
         raise HTTPException(status_code=503, detail="GITHUB_WEBHOOK_SECRET not configured")
+    if content_length is None:
+        raise HTTPException(status_code=411, detail="Content-Length required")
+    if content_length > webhooks.MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
     body = await request.body()
+    if len(body) > webhooks.MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
     if not webhooks.verify_signature(secret, body, x_hub_signature_256):
         raise HTTPException(status_code=401, detail="invalid signature")
     try:
         payload = json.loads(body or b"{}")
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="invalid JSON")
-    result = webhooks.handle_event(x_github_event, payload)
+    result = await run_in_threadpool(webhooks.handle_event, x_github_event, payload)
     log.info("Webhook %s delivery=%s -> %s", x_github_event, x_github_delivery, result)
     return JSONResponse(content={"ok": True, "delivery": x_github_delivery, **result})

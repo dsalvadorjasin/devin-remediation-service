@@ -4,13 +4,14 @@ An event-driven automation that scans a GitHub repository for issues labelled `d
 
 ## How it works
 
-1. On startup, the service scans the GitHub repo for open issues with the `devin-remediate` label.
-2. For each issue, it checks for an existing open PR before creating a Devin session, so restarting the service never triggers duplicate work.
+1. On startup, the API enqueues a scan of the GitHub repo for open issues with the `devin-remediate` label. Scans run on a Celery worker.
+2. For each issue, a `remediate_issue_task` checks for an existing open PR before creating a Devin session, so restarting the service never triggers duplicate work.
 3. If no open PR exists, a Devin session is created with a structured prompt to fix the issue and open a PR.
-4. A background loop repeats the scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
-5. A separate background loop polls the Devin API every 60 seconds to update the status of running sessions. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
-6. A live dashboard at `http://localhost:8000` shows the status of all tasks.
-7. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
+4. Celery Beat repeats the scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
+5. Each running session is tracked by a `poll_session_task` that re-queues itself every 60 seconds (`apply_async(countdown=60)`) until the session finishes. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
+6. Poll ownership is durable: each chain holds a `poll_token` and a `poll_lease_until` lease on the task row, renewed on every hop. The periodic scan re-arms polling for any `running` session whose lease is missing or expired (worker restart, lost broker message, sessions created before Celery), claiming the lease atomically so concurrent scans never start duplicate chains; a poll carrying a superseded token stops itself.
+7. A live dashboard at `http://localhost:8000` shows the status of all tasks.
+8. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
 
 ## Quick start
 
@@ -29,6 +30,9 @@ DEVIN_API_KEY=your_devin_api_key
 DEVIN_ORG_ID=your_devin_org_id
 SCAN_INTERVAL_MINUTES=5
 DATABASE_URL=postgresql+psycopg://remediation:remediation@postgres:5432/remediation
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+ORCHESTRATOR=celery
 ```
 
 - `GITHUB_TOKEN` — fine-grained personal access token scoped to the target repository. Full permission footprint:
@@ -38,6 +42,8 @@ DATABASE_URL=postgresql+psycopg://remediation:remediation@postgres:5432/remediat
   - **Webhooks: read and write** — programmatic webhook registration.
   - **Metadata: read** — baseline permission required by every fine-grained token.
 - `DATABASE_URL` — SQLAlchemy connection string. The default in `.env.example` points at the `postgres` service in `docker-compose.yml`. If unset, the app falls back to a local SQLite file (`sqlite:///./remediation.db`), which is what the unit tests use (in-memory).
+- `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis URLs used by Celery. Defaults point at the `redis` service in `docker-compose.yml`.
+- `ORCHESTRATOR` — which `Orchestrator` implementation dispatches work. Only `celery` exists today.
 - `DEVIN_API_KEY` — API key for Devin (starts with `cog_`), which you can generate following the instructions [here](https://docs.devin.ai/api-reference/getting-started/teams-quickstart#step-2-generate-an-api-key).
 - `DEVIN_ORG_ID` - Organization ID for Devin (starts with `org-`), which you can find under `Settings -> General` in [app.devin.ai](app.devin.ai).
 
@@ -53,11 +59,19 @@ Install Docker Desktop and run the following command in the project root:
 docker compose up --build
 ```
 
-This starts the `app` container plus a `postgres` (16) container with a persistent `pgdata` volume. On startup the app runs `alembic upgrade head` to apply migrations before serving.
+This starts five containers:
+
+| Service | Image | Role |
+|---|---|---|
+| `app` | this repo | FastAPI API + dashboard; runs `alembic upgrade head` then uvicorn |
+| `worker` | this repo | `celery worker` executing scan / remediate / poll tasks |
+| `beat` | this repo | `celery beat` scheduling the periodic reconciliation scan |
+| `redis` | `redis:7-alpine` | Celery broker + result backend |
+| `postgres` | `postgres:16-alpine` | Task state, persistent `pgdata` volume |
 
 The dashboard will be available at **http://localhost:8000**.
-At startup, the app will scan for open issues labelled `devin-remediate` in the target repository.
-A background loop will scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
+At startup, the app enqueues a scan for open issues labelled `devin-remediate` in the target repository.
+Celery Beat enqueues a scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
 You can also trigger a manual scan by using the **Scan Issues** button in the dashboard.
 If a Devin session fails, you can retry it by clicking the **Retry Failed** button.
 
@@ -69,9 +83,14 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run 
 uv sync
 uv run pytest
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+# in separate terminals, with a local Redis on localhost:6379:
+uv run celery -A app.celery_app:celery_app worker --loglevel=info
+uv run celery -A app.celery_app:celery_app beat --loglevel=info
 ```
 
 `uv sync` installs the runtime dependencies and the `dev` dependency group (which includes the test tools). `uv run pytest` runs the test suite, and `uv run uvicorn app.main:app` starts the local dashboard at **http://localhost:8000**.
+
+The tests set `CELERY_TASK_ALWAYS_EAGER=1`, so Celery tasks execute synchronously in-process and no broker is required.
 
 ### Database migrations
 
@@ -98,13 +117,20 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 
 **Polling over webhooks.** Rather than using a GitHub webhook, the service polls on a configurable interval. This avoids the need for a public endpoint and makes local development and Docker deployment straightforward with no external infrastructure. In a production deployment, a webhook could be added so that the service is notified immediately when an issue is labelled, but the polling approach is simpler and sufficient for a demo/local deployment.
 
-**Single process, async background tasks.** The periodic scan and session polling loops run as asyncio tasks within the same FastAPI process. This keeps the deployment footprint to a single container with no separate worker process or message broker.
+**Celery behind a swappable orchestrator.** All background work (scans, per-issue remediation, per-session polling) runs as Celery tasks (`app/tasks.py`) on Redis. The API never talks to Celery directly: it calls `app.orchestrator.get_orchestrator()`, which returns an implementation of the abstract `Orchestrator` interface (`enqueue_scan`, `enqueue_remediation`, `schedule_poll`). `CeleryOrchestrator` is the only implementation today; a future `TemporalOrchestrator` can implement the same three methods (with a durable timer replacing the self-re-queuing poll task) without touching routes or the `app/devin.py` / `app/github.py` clients. Business logic lives in `app/remediation.py` and is scheduler-agnostic.
 
 ## Project structure
 
 ```bash
 app/
-├── main.py         # FastAPI app, startup, background loop, routes
+├── main.py         # FastAPI app, startup (enqueues initial scan), routes
+├── remediation.py  # Scheduler-agnostic business logic (scan, process issue, poll session)
+├── celery_app.py   # Celery app + Beat schedule, configured from env
+├── tasks.py        # Celery task wrappers around app/remediation.py
+├── orchestrator/
+│   ├── base.py                 # Abstract Orchestrator interface
+│   ├── celery_orchestrator.py  # CeleryOrchestrator (ORCHESTRATOR=celery)
+│   └── __init__.py             # get_orchestrator() factory
 ├── github.py       # GitHub API client
 ├── devin.py        # Devin API client
 ├── store.py        # Persistent task store (same API as the old in-memory store)

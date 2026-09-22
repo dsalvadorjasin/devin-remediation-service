@@ -1,7 +1,11 @@
-# Runs `alembic upgrade head` once per release. Completed Jobs are immutable, so
-# the Job is garbage-collected right after it finishes (ttlSecondsAfterFinished)
-# and re-created by the next `kubectl apply -k`; the workloads' wait-for-migrations
-# init container blocks their rollout until the schema is at head.
+# Runs `alembic upgrade head` once per release. Job pod templates are immutable,
+# so a release must delete the previous Job before applying (see README /
+# k8s/deploy.sh: `kubectl delete job remediation-migrate --ignore-not-found`
+# then `kubectl apply -k` and `kubectl wait --for=condition=complete`).
+# ttlSecondsAfterFinished is only a safety net for stale Jobs; the workloads'
+# wait-for-migrations init container blocks their rollout until the schema is
+# at head, so a skipped migration surfaces as pods stuck in Init, never as a
+# new image running against an old schema.
 apiVersion: batch/v1
 kind: Job
 metadata:

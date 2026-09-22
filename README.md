@@ -50,7 +50,7 @@ SEMGREP_SCAN_INTERVAL_MINUTES=60
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis URLs used by Celery. Defaults point at the `redis` service in `docker-compose.yml`.
 - `ORCHESTRATOR` — which `Orchestrator` implementation dispatches work. Only `celery` exists today.
 - `GITHUB_WEBHOOK_SECRET` — self-generated shared secret for HMAC (`X-Hub-Signature-256`) verification of webhook deliveries. If unset, `POST /webhooks/github` returns 503 and the service runs on the reconciliation scan alone.
-- `INGEST_TOKEN` — self-generated bearer token for `POST /ingest/semgrep` (`Authorization: Bearer ...` or `X-Ingest-Token`). Unset -> 503.
+- `INGEST_TOKEN` — self-generated bearer token for `POST /ingest/semgrep` and `POST /scan` (`Authorization: Bearer ...` or `X-Ingest-Token`). Unset -> 503. The dashboard prompts for it once per browser session before triggering a scan.
 - `SEMGREP_SCAN_INTERVAL_MINUTES` — Beat interval for the Semgrep discovery task. Optional tuning: `SEMGREP_CONFIG` (default `p/default`), `SEMGREP_CHECKOUT_DIR`, `SEMGREP_MAX_FINDINGS` (cap issues filed per run; `0` = unlimited).
 - `DEVIN_API_KEY` — API key for Devin (starts with `cog_`), which you can generate following the instructions [here](https://docs.devin.ai/api-reference/getting-started/teams-quickstart#step-2-generate-an-api-key).
 - `DEVIN_ORG_ID` - Organization ID for Devin (starts with `org-`), which you can find under `Settings -> General` in [app.devin.ai](app.devin.ai).
@@ -130,12 +130,12 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 
 ```bash
 kubectl create namespace devin-remediation
-kubectl -n devin-remediation create secret generic remediation-secrets --from-env-file=.env
+kubectl -n devin-remediation create secret generic remediation-secrets --from-env-file=.env  # incl. POSTGRES_PASSWORD + DATABASE_URL
 # set your image in `images:` and the Ingress host / TLS secret (or cert-manager issuer) in api.yaml, then:
-kubectl apply -k k8s/
+k8s/deploy.sh devin-remediation
 ```
 
-Migrations: every `kubectl apply -k` re-creates the `remediation-migrate` Job (it is garbage-collected after completion), and each workload has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
+Releases go through `k8s/deploy.sh <namespace>`: it deletes the previous (immutable) `remediation-migrate` Job, applies the kustomization, waits for the new Job to complete, then waits for the rollouts. Each workload additionally has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema even if the script is bypassed. Redis runs as a StatefulSet with AOF persistence so queued Celery messages survive a pod replacement; Postgres takes its password (and the app its `DATABASE_URL`) from `remediation-secrets`, not the ConfigMap. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
 
 ## Architecture decisions
 

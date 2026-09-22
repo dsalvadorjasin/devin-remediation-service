@@ -35,7 +35,9 @@ def test_manual_scan_enqueues_scan_through_orchestrator(monkeypatch):
     monkeypatch.setattr(remediation, "scan_and_process", fake_scan_and_process)
     client = TestClient(main.app)
 
-    response = client.post("/scan?force_retry=true")
+    monkeypatch.setenv("INGEST_TOKEN", "t0k")
+    assert client.post("/scan?force_retry=true").status_code == 401
+    response = client.post("/scan?force_retry=true", headers={"X-Ingest-Token": "t0k"})
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "enqueued": True, "force_retry": True}

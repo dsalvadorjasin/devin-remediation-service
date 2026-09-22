@@ -239,11 +239,27 @@
       }
     }
 
+    function ingestToken(reset) {
+      if (reset) sessionStorage.removeItem('ingestToken');
+      let t = sessionStorage.getItem('ingestToken');
+      if (!t) {
+        t = window.prompt('INGEST_TOKEN (required for POST /scan):') || '';
+        if (t) sessionStorage.setItem('ingestToken', t);
+      }
+      return t;
+    }
+
     async function triggerScan(forceRetry) {
       const btn = forceRetry ? document.getElementById('btnRetry') : document.getElementById('btnScan');
       btn.disabled = true;
       try {
-        await fetch(`/scan?force_retry=${forceRetry}`, { method: 'POST' });
+        const token = ingestToken(false);
+        if (!token) return;
+        const resp = await fetch(`/scan?force_retry=${forceRetry}`, {
+          method: 'POST',
+          headers: { 'X-Ingest-Token': token },
+        });
+        if (resp.status === 401) { ingestToken(true); alert('Invalid INGEST_TOKEN'); return; }
         await fetchStatus();
       } finally {
         btn.disabled = false;

@@ -23,13 +23,19 @@ router = APIRouter(tags=["ingest"])
 
 
 @router.post("/scan")
-async def manual_scan(force_retry: bool = False):
+async def manual_scan(
+    force_retry: bool = False,
+    authorization: str | None = Header(default=None),
+    x_ingest_token: str | None = Header(default=None),
+):
     """
-    Enqueue a scan through the orchestrator.
+    Enqueue a scan through the orchestrator. Requires INGEST_TOKEN (same
+    scheme as /ingest/semgrep) since the API is reachable through the Ingress.
     - New issues (no existing PR) → create session.
     - failed → retry if force_retry=True.
     - running → always skip.
     """
+    _check_ingest_token(authorization, x_ingest_token)
     get_orchestrator().enqueue_scan(force_retry=force_retry)
     return JSONResponse(content={"ok": True, "enqueued": True, "force_retry": force_retry})
 

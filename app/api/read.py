@@ -6,6 +6,7 @@ store; a future SPA (Phase 6) attaches here without touching ingest.
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 
@@ -35,8 +36,12 @@ async def status_for_issue(issue_number: int):
     return JSONResponse(content=entry)
 
 
-@router.get("/healthz")
-async def healthz():
+def _db_ping() -> None:
     with SessionLocal() as session:
         session.execute(text("SELECT 1"))
+
+
+@router.get("/healthz")
+async def healthz():
+    await run_in_threadpool(_db_ping)
     return {"ok": True}

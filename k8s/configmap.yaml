@@ -10,6 +10,5 @@ data:
   SEMGREP_CHECKOUT_DIR: /checkout/repo
   SEMGREP_MAX_FINDINGS: "0"
   ORCHESTRATOR: celery
-  DATABASE_URL: postgresql+psycopg://remediation:remediation@postgres:5432/remediation
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1

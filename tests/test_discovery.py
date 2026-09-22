@@ -240,3 +240,16 @@ def test_discovery_task_enqueues_scan_when_issues_created(monkeypatch):
     monkeypatch.setattr(CeleryOrchestrator, "enqueue_scan", lambda self, force_retry=False: calls.append(force_retry))
     assert tasks.discovery_task()["created"]
     assert calls == [False]
+
+
+def test_scan_env_drops_service_credentials(monkeypatch):
+    for k in ("GITHUB_TOKEN", "DEVIN_API_KEY", "DATABASE_URL", "CELERY_BROKER_URL", "INGEST_TOKEN", "GITHUB_WEBHOOK_SECRET"):
+        monkeypatch.setenv(k, "secret")
+    monkeypatch.setenv("SEMGREP_CONFIG", "p/ci")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = SemgrepDiscoverySource.scan_env()
+
+    assert env["SEMGREP_CONFIG"] == "p/ci"
+    assert env["PATH"] == "/usr/bin"
+    assert not {k for k in env if k in ("GITHUB_TOKEN", "DEVIN_API_KEY", "DATABASE_URL", "CELERY_BROKER_URL", "INGEST_TOKEN", "GITHUB_WEBHOOK_SECRET")}

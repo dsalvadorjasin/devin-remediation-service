@@ -109,6 +109,17 @@ class SemgrepDiscoverySource(DiscoverySource):
             )
         return self.checkout_dir
 
+    @staticmethod
+    def scan_env() -> dict[str, str]:
+        """Environment for the scanner subprocess: only what semgrep needs, none of
+        the worker's service credentials (GitHub, Devin, database, broker)."""
+        keep = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CACHE_HOME")
+        return {
+            k: v
+            for k, v in os.environ.items()
+            if k in keep or k.startswith("SEMGREP_")
+        }
+
     def run_semgrep(self, target: Path) -> dict:
         semgrep = shutil.which("semgrep") or "semgrep"
         cmd = [
@@ -123,7 +134,7 @@ class SemgrepDiscoverySource(DiscoverySource):
             str(target),
         ]
         log.info("Running: %s", " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(target))
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(target), env=self.scan_env())
         if proc.returncode not in (0, 1):  # 1 = findings present
             raise RuntimeError(f"semgrep failed ({proc.returncode}): {proc.stderr[-2000:]}")
         return json.loads(proc.stdout)

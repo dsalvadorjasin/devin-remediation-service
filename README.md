@@ -126,14 +126,16 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 
 ### Kubernetes (optional)
 
-`k8s/` contains a kustomize base with the same topology: `remediation-api` (Deployment + Service + Ingress), `remediation-ingest-worker`, `remediation-devin-worker`, `remediation-beat` (replicas=1, `Recreate`), a `remediation-migrate` Job, plus `redis` and a `postgres` StatefulSet. Non-secret config lives in `configmap.yaml`; `secret.example.yaml` holds placeholders only:
+`k8s/` contains a kustomize base with the same topology: `remediation-api` (Deployment + Service + Ingress), `remediation-ingest-worker`, `remediation-devin-worker`, `remediation-beat` (replicas=1, `Recreate`), a `remediation-migrate` Job, plus `redis` and a `postgres` StatefulSet. Non-secret config lives in `configmap.yaml`. The `remediation-secrets` Secret is **not** part of the kustomize base (`secret.example.yaml` only documents the expected keys) and must be created out of band:
 
 ```bash
 kubectl create namespace devin-remediation
 kubectl -n devin-remediation create secret generic remediation-secrets --from-env-file=.env
-# remove secret.example.yaml from k8s/kustomization.yaml, set your image in `images:`, then:
+# set your image in `images:` and the Ingress host / TLS secret (or cert-manager issuer) in api.yaml, then:
 kubectl apply -k k8s/
 ```
+
+Migrations: every `kubectl apply -k` re-creates the `remediation-migrate` Job (it is garbage-collected after completion), and each workload has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
 
 ## Architecture decisions
 

@@ -1,9 +1,14 @@
+# Runs `alembic upgrade head` once per release. Completed Jobs are immutable, so
+# the Job is garbage-collected right after it finishes (ttlSecondsAfterFinished)
+# and re-created by the next `kubectl apply -k`; the workloads' wait-for-migrations
+# init container blocks their rollout until the schema is at head.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: remediation-migrate
 spec:
   backoffLimit: 3
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: OnFailure

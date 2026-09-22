@@ -50,6 +50,10 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    # Persist the target-repo checkout between restarts. Pinned here so a
+    # different SEMGREP_CHECKOUT_DIR in .env can't silently bypass the volume.
+    environment:
+      SEMGREP_CHECKOUT_DIR: /tmp/remediation-checkout
     volumes:
       - semgrep-checkout:/tmp/remediation-checkout
 

@@ -4,7 +4,8 @@ namespace: devin-remediation
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.example.yaml
+  # remediation-secrets is NOT part of the base: create it out of band
+  # (see README / secret.example.yaml) before applying.
   - postgres.yaml
   - redis.yaml
   - migrate-job.yaml

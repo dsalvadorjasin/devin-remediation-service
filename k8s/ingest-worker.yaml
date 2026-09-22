@@ -11,6 +11,13 @@ spec:
     metadata:
       labels: {app: remediation-ingest-worker, tier: worker}
     spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: devin-remediation-service
+          command: [sh, -c, "until uv run alembic current 2>/dev/null | grep -q '(head)'; do echo waiting for migrations; sleep 5; done"]
+          envFrom:
+            - configMapRef: {name: remediation-config}
+            - secretRef: {name: remediation-secrets}
       containers:
         - name: worker
           image: devin-remediation-service
@@ -22,7 +29,7 @@ spec:
             - {name: checkout, mountPath: /checkout}
           livenessProbe:
             exec:
-              command: [uv, run, celery, -A, "app.celery_app:celery_app", inspect, ping, -d, "ingest@$(HOSTNAME)"]
+              command: [sh, -c, 'uv run celery -A app.celery_app:celery_app inspect ping -d "ingest@$HOSTNAME" --timeout 10']
             initialDelaySeconds: 30
             periodSeconds: 60
           resources:

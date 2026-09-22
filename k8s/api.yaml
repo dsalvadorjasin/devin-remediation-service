@@ -19,6 +19,13 @@ spec:
     metadata:
       labels: {app: remediation-api, tier: api}
     spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: devin-remediation-service
+          command: [sh, -c, "until uv run alembic current 2>/dev/null | grep -q '(head)'; do echo waiting for migrations; sleep 5; done"]
+          envFrom:
+            - configMapRef: {name: remediation-config}
+            - secretRef: {name: remediation-secrets}
       containers:
         - name: api
           image: devin-remediation-service
@@ -37,13 +44,22 @@ spec:
             requests: {cpu: 100m, memory: 256Mi}
 ---
 # Expose publicly (GitHub webhooks + semgrep.yml POST /ingest/semgrep need to reach it).
+# TLS is mandatory: the webhook HMAC secret and INGEST_TOKEN travel in these requests.
+# Supply the certificate in `remediation-api-tls` (or let cert-manager issue it via
+# the annotation below); plain HTTP is redirected.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: remediation-api
   annotations:
     kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt
 spec:
+  tls:
+    - hosts: [remediation.example.com]
+      secretName: remediation-api-tls
   rules:
     - host: remediation.example.com
       http:

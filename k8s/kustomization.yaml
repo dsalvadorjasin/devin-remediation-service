@@ -13,7 +13,7 @@ resources:
   - ingest-worker.yaml
   - devin-worker.yaml
   - beat.yaml
-images:
-  - name: devin-remediation-service
-    newName: ghcr.io/dsalvadorjasin/devin-remediation-service
-    newTag: latest
+# Manifests reference the placeholder image `devin-remediation-service`; the
+# real registry path and an immutable tag/digest are set per release by
+# k8s/deploy.sh (never `latest`: re-applying `:latest` does not change the pod
+# templates, so nothing would roll).

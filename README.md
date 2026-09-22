@@ -132,10 +132,10 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 kubectl create namespace devin-remediation
 kubectl -n devin-remediation create secret generic remediation-secrets --from-env-file=.env  # incl. POSTGRES_PASSWORD + DATABASE_URL
 # set your image in `images:` and the Ingress host / TLS secret (or cert-manager issuer) in api.yaml, then:
-k8s/deploy.sh devin-remediation
+k8s/deploy.sh ghcr.io/<org>/devin-remediation-service:<unique-tag-or-digest> devin-remediation
 ```
 
-Releases go through `k8s/deploy.sh <namespace>`: it deletes the previous (immutable) `remediation-migrate` Job, applies the kustomization, waits for the new Job to complete, then waits for the rollouts. Each workload additionally has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema even if the script is bypassed. Redis runs as a StatefulSet with AOF persistence so queued Celery messages survive a pod replacement; Postgres takes its password (and the app its `DATABASE_URL`) from `remediation-secrets`, not the ConfigMap. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
+Releases go through `k8s/deploy.sh <image-ref> [namespace]`: it renders a temporary kustomize overlay pinning that namespace and an immutable image (unique tag or digest; `:latest` is refused since re-applying it never triggers a rollout), deletes the previous (immutable) `remediation-migrate` Job, applies the overlay, waits for the new Job to complete, then waits for the rollouts. Each workload additionally has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema even if the script is bypassed. Redis runs as a StatefulSet with AOF persistence so queued Celery messages survive a pod replacement; Postgres takes its password (and the app its `DATABASE_URL`) from `remediation-secrets`, not the ConfigMap. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
 
 ## Architecture decisions
 

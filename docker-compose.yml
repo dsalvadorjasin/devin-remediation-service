@@ -86,7 +86,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: remediation
-      POSTGRES_PASSWORD: remediation
+      # Must match the password inside DATABASE_URL (.env); both default to `remediation`.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-remediation}
       POSTGRES_DB: remediation
     volumes:
       - pgdata:/var/lib/postgresql/data

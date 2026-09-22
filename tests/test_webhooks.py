@@ -295,20 +295,28 @@ def test_pr_closed_restores_pr_url_when_publish_fails(secret, enqueued, monkeypa
 
 def test_detach_closed_pr_is_conditional():
     store.upsert(7, title="t", issue_url="u", status="running", pr_url="https://x/1")
-    assert store.detach_closed_pr(7, "https://x/1") is False
+    assert store.detach_closed_pr(7, "https://x/1") is None
     store.upsert(7, status="completed")
-    assert store.detach_closed_pr(7, "https://x/other") is False
-    assert store.detach_closed_pr(7, "https://x/1") is True
-    assert store.detach_closed_pr(7, "https://x/1") is False
+    assert store.detach_closed_pr(7, "https://x/other") is None
+    assert store.detach_closed_pr(7, "https://x/1") is not None
+    assert store.detach_closed_pr(7, "https://x/1") is None
     assert store.get(7)["pr_url"] == "" and store.get_status(7) == "failed"
 
 
 def test_reattach_closed_pr_skips_replacement_state():
     store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://x/1")
-    assert store.detach_closed_pr(7, "https://x/1")
+    token = store.detach_closed_pr(7, "https://x/1")
+    assert token is not None
+    # A replacement started and failed: same status/pr_url as after detach,
+    # but the row was written to, so compensation must not apply.
     store.upsert(7, status="running")
-    assert store.reattach_closed_pr(7, "https://x/1") is False
-    assert store.get(7)["pr_url"] == ""
     store.upsert(7, status="failed")
-    assert store.reattach_closed_pr(7, "https://x/1") is True
+    assert store.reattach_closed_pr(7, "https://x/1", token) is False
+    assert store.get(7)["pr_url"] == ""
+
+
+def test_reattach_closed_pr_restores_untouched_row():
+    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://x/1")
+    token = store.detach_closed_pr(7, "https://x/1")
+    assert store.reattach_closed_pr(7, "https://x/1", token) is True
     assert store.get(7)["pr_url"] == "https://x/1"

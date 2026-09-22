@@ -128,12 +128,13 @@ def _handle_pull_request(payload: dict) -> dict:
                 continue
             if not (_has_label(issue) and issue.get("state") == "open"):
                 continue
-            if not store.detach_closed_pr(number, pr_url):
+            token = store.detach_closed_pr(number, pr_url)
+            if token is None:
                 continue
             try:
                 get_orchestrator().enqueue_remediation(_issue_summary(issue), force_retry=True)
             except Exception:
-                store.reattach_closed_pr(number, pr_url)
+                store.reattach_closed_pr(number, pr_url, token)
                 raise
             touched.append(number)
 

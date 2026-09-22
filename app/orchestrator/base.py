@@ -19,6 +19,10 @@ class Orchestrator(ABC):
         Devin session for it if the dedup guards allow."""
 
     @abstractmethod
+    def enqueue_discovery(self, dry_run: bool = False) -> None:
+        """Run every DiscoverySource and file new findings as issues."""
+
+    @abstractmethod
     def schedule_poll(
         self,
         issue_number: int,

@@ -4,7 +4,7 @@ from app.github import find_existing_pr, get_labeled_issues, post_comment
 
 
 def test_get_labeled_issues_filters_out_pull_requests(httpx_mock):
-    url = "https://api.github.com/repos/test-org/test-repo/issues?labels=devin-remediate&state=open&per_page=100"
+    url = "https://api.github.com/repos/test-org/test-repo/issues?labels=devin-remediate&state=open&per_page=100&page=1"
     httpx_mock.add_response(
         method="GET",
         url=url,

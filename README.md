@@ -4,6 +4,7 @@ An event-driven automation that scans a GitHub repository for issues labelled `d
 
 ## How it works
 
+0. **Discovery.** On a schedule (`SEMGREP_SCAN_INTERVAL_MINUTES`), a worker clones/updates the target repo, runs Semgrep, and files one `devin-remediate` issue per new finding (dedup by fingerprint). `POST /ingest/semgrep` accepts SARIF from the `semgrep.yml` GitHub workflow as a host-free alternative.
 1. On startup, the API enqueues a scan of the GitHub repo for open issues with the `devin-remediate` label. Scans run on a Celery worker.
 2. For each issue, a `remediate_issue_task` checks for an existing open PR before creating a Devin session, so restarting the service never triggers duplicate work.
 3. If no open PR exists, a Devin session is created with a structured prompt to fix the issue and open a PR.
@@ -35,6 +36,8 @@ CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
 ORCHESTRATOR=celery
 GITHUB_WEBHOOK_SECRET=your_webhook_secret_here
+INGEST_TOKEN=your_ingest_token_here
+SEMGREP_SCAN_INTERVAL_MINUTES=60
 ```
 
 - `GITHUB_TOKEN` — fine-grained personal access token scoped to the target repository. Full permission footprint:
@@ -47,6 +50,8 @@ GITHUB_WEBHOOK_SECRET=your_webhook_secret_here
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis URLs used by Celery. Defaults point at the `redis` service in `docker-compose.yml`.
 - `ORCHESTRATOR` — which `Orchestrator` implementation dispatches work. Only `celery` exists today.
 - `GITHUB_WEBHOOK_SECRET` — self-generated shared secret for HMAC (`X-Hub-Signature-256`) verification of webhook deliveries. If unset, `POST /webhooks/github` returns 503 and the service runs on the reconciliation scan alone.
+- `INGEST_TOKEN` — self-generated bearer token for `POST /ingest/semgrep` (`Authorization: Bearer ...` or `X-Ingest-Token`). Unset -> 503.
+- `SEMGREP_SCAN_INTERVAL_MINUTES` — Beat interval for the Semgrep discovery task. Optional tuning: `SEMGREP_CONFIG` (default `p/default`), `SEMGREP_CHECKOUT_DIR`, `SEMGREP_MAX_FINDINGS` (cap issues filed per run; `0` = unlimited).
 - `DEVIN_API_KEY` — API key for Devin (starts with `cog_`), which you can generate following the instructions [here](https://docs.devin.ai/api-reference/getting-started/teams-quickstart#step-2-generate-an-api-key).
 - `DEVIN_ORG_ID` - Organization ID for Devin (starts with `org-`), which you can find under `Settings -> General` in [app.devin.ai](app.devin.ai).
 
@@ -118,6 +123,20 @@ TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 
 **Persistent storage.** `app/store.py` keeps the original function signatures (`upsert`, `get`, `get_all`, `get_status`, `clear`) but is backed by a `tasks` table (`app/db.py`). On startup the service still re-scans GitHub and treats the live PR state as the source of truth, so a stale database never blocks work.
 
+**Pluggable discovery sources.** `app/discovery/base.py` defines `DiscoverySource.discover() -> list[Finding]` and the `Finding` dataclass (`rule_id`, `message`, `severity`, `file_path`, `start_line`, `snippet`, `fingerprint`). `SemgrepDiscoverySource` clones the target repo (`Contents: read`) with `git clone --depth 1`, runs `semgrep scan --sarif`, and `parse_sarif` normalizes the results. The fingerprint is Semgrep's SARIF `matchBasedId/v1` when present, otherwise `sha256(rule_id | file | line//10 | normalized snippet)`, so a finding that shifts a few lines does not become a new issue. `ingest_findings` looks up existing open issues by the hidden `<!-- semgrep-fingerprint: ... -->` marker and only calls `github.create_issue` for new ones; the ordinary scan/webhook path then remediates those issues unchanged.
+
+Three ways to trigger discovery:
+
+```bash
+# 1. Celery Beat: every SEMGREP_SCAN_INTERVAL_MINUTES (automatic)
+# 2. Ask a worker to run discovery now (empty body)
+curl -X POST http://localhost:8000/ingest/semgrep -H "Authorization: Bearer $INGEST_TOKEN"
+# 3. Push SARIF you produced elsewhere (what .github/workflows/semgrep.yml does)
+semgrep scan --config p/default --sarif -o out.sarif /path/to/checkout
+curl -X POST "http://localhost:8000/ingest/semgrep?dry_run=true" -H "Authorization: Bearer $INGEST_TOKEN" \
+     -H "Content-Type: application/json" --data-binary @out.sarif
+```
+
 **Webhooks for immediacy, reconciliation scan for eventual consistency.** `app/webhooks.py` verifies the HMAC signature and normalizes `issues` / `pull_request` events into idempotent store updates and orchestrator calls:
 
 | Event | Effect |
@@ -153,6 +172,10 @@ app/
 │   ├── base.py                 # Abstract Orchestrator interface
 │   ├── celery_orchestrator.py  # CeleryOrchestrator (ORCHESTRATOR=celery)
 │   └── __init__.py             # get_orchestrator() factory
+├── discovery/
+│   ├── base.py      # DiscoverySource interface + Finding dataclass
+│   ├── semgrep.py   # SemgrepDiscoverySource + parse_sarif
+│   └── ingest.py    # ingest_findings: fingerprint dedup -> github.create_issue
 ├── webhooks.py     # HMAC verification + issues/pull_request event normalization
 ├── github.py       # GitHub API client (issues, PRs, comments, webhooks)
 ├── devin.py        # Devin API client
@@ -162,6 +185,9 @@ app/
     └── index.html  # Dashboard
 alembic/            # Database migrations
 scripts/webhook.py  # register / list / delete the repo webhook at runtime
+.github/workflows/
+├── tests.yml       # uv sync + pytest
+└── semgrep.yml     # cron/workflow_dispatch Semgrep -> SARIF -> POST /ingest/semgrep
 alembic.ini
 Dockerfile
 docker-compose.yml

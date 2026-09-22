@@ -1,0 +1,78 @@
+# Host-free alternative to the Celery Beat discovery task: run Semgrep on the
+# TARGET repository in GitHub Actions and push the SARIF to the remediation
+# service, which files a `devin-remediate` issue for every new fingerprint.
+#
+# Copy this workflow into the target repo (e.g. dsalvadorjasin/superset) or
+# keep it here and set TARGET_REPO. Requires two repository secrets:
+#   REMEDIATION_INGEST_URL   e.g. https://remediation.example.com/ingest/semgrep
+#   REMEDIATION_INGEST_TOKEN the service's INGEST_TOKEN
+# and, when scanning another repository from here, a token with Contents: read
+# on it as TARGET_REPO_TOKEN.
+name: semgrep-discovery
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/repo to scan (defaults to this repository)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Only report what would be filed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo || vars.TARGET_REPO || github.repository }}
+          token: ${{ secrets.TARGET_REPO_TOKEN || github.token }}
+          fetch-depth: 1
+
+      - name: Run Semgrep (SARIF)
+        # Exit 1 = findings present (expected); anything else is a scanner error.
+        run: |
+          semgrep scan --config p/default --sarif --output semgrep.sarif --metrics=off
+          rc=$?
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "semgrep failed with exit code $rc" >&2
+            exit "$rc"
+          fi
+        shell: bash {0}
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+
+      - name: POST SARIF to remediation service
+        env:
+          INGEST_URL: ${{ secrets.REMEDIATION_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.REMEDIATION_INGEST_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -z "${INGEST_URL}" ]; then
+            echo "REMEDIATION_INGEST_URL not set; skipping POST"
+            exit 0
+          fi
+          case "${INGEST_URL,,}" in
+            https://*) ;;
+            *) echo "REMEDIATION_INGEST_URL must be https:// (bearer token would be sent in clear)" >&2; exit 1 ;;
+          esac
+          curl --fail-with-body -sS -X POST \
+            "${INGEST_URL}?dry_run=${DRY_RUN:-false}" \
+            -H "Authorization: Bearer ${INGEST_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @semgrep.sarif

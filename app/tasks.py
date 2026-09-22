@@ -25,6 +25,22 @@ def remediate_issue_task(issue: dict, force_retry: bool = False) -> bool:
     return remediation.process_issue(issue, force_retry=force_retry)
 
 
+@celery_app.task(name="app.tasks.discovery_task")
+def discovery_task(dry_run: bool = False) -> dict:
+    """Update the target repo checkout, run every discovery source, and file
+    new findings as `devin-remediate` issues. Newly created issues are picked
+    up by an immediate scan (or the webhook, if registered)."""
+    from app.discovery import SemgrepDiscoverySource, ingest_findings
+
+    findings = SemgrepDiscoverySource().discover()
+    result = ingest_findings(findings, dry_run=dry_run)
+    if result["created"] and not dry_run:
+        from app.orchestrator import get_orchestrator
+
+        get_orchestrator().enqueue_scan(force_retry=False)
+    return result
+
+
 @celery_app.task(name="app.tasks.poll_session_task")
 def poll_session_task(issue_number: int, session_id: str, poll_token: str) -> bool:
     """Poll a running session once; re-queue itself while it is still running.

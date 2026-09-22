@@ -16,6 +16,11 @@ class CeleryOrchestrator(Orchestrator):
             kwargs={"issue": issue, "force_retry": force_retry}
         )
 
+    def enqueue_discovery(self, dry_run: bool = False) -> None:
+        from app import tasks
+
+        tasks.discovery_task.apply_async(kwargs={"dry_run": dry_run})
+
     def schedule_poll(
         self,
         issue_number: int,

@@ -21,6 +21,7 @@ def _truthy(value: str | None) -> bool:
 
 
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_MINUTES", "5")) * 60
+SEMGREP_SCAN_INTERVAL_SECONDS = int(os.getenv("SEMGREP_SCAN_INTERVAL_MINUTES", "60")) * 60
 
 celery_app = Celery(
     "remediation",
@@ -47,6 +48,11 @@ celery_app.conf.update(
             "task": "app.tasks.scan_task",
             "schedule": SCAN_INTERVAL_SECONDS,
             "kwargs": {"force_retry": False},
+        },
+        "semgrep-discovery": {
+            "task": "app.tasks.discovery_task",
+            "schedule": SEMGREP_SCAN_INTERVAL_SECONDS,
+            "kwargs": {"dry_run": False},
         },
     },
 )

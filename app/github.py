@@ -32,13 +32,19 @@ def get_labeled_issues() -> list[dict]:
     # See GitHub API docs:
     # https://docs.github.com/en/rest/issues/issues?apiVersion=2026-03-10#list-repository-issues
     url = f"{GITHUB_API}/repos/{_repo()}/issues"
-    params = {"labels": LABEL, "state": "open", "per_page": 100}
+    issues: list[dict] = []
+    page = 1
     with httpx.Client() as client:
-        resp = client.get(url, headers=_headers(), params=params)
-        resp.raise_for_status()
-    issues = resp.json()
-    # Exclude pull requests (GitHub returns PRs as issues too)
-    return [i for i in issues if "pull_request" not in i]
+        while True:
+            params = {"labels": LABEL, "state": "open", "per_page": 100, "page": page}
+            resp = client.get(url, headers=_headers(), params=params)
+            resp.raise_for_status()
+            batch = resp.json()
+            # Exclude pull requests (GitHub returns PRs as issues too)
+            issues.extend(i for i in batch if "pull_request" not in i)
+            if len(batch) < 100:
+                return issues
+            page += 1
 
 
 def find_existing_pr(issue_number: int) -> str | None:
@@ -104,6 +110,49 @@ def add_labels(issue_number: int, labels: list[str]) -> None:
     with httpx.Client() as client:
         resp = client.post(url, headers=_headers(), json={"labels": labels})
         resp.raise_for_status()
+
+
+def create_issue(title: str, body: str, labels: list[str] | None = None) -> dict:
+    """Create an issue (Issues: write). Defaults to the remediation label."""
+    url = f"{GITHUB_API}/repos/{_repo()}/issues"
+    payload = {"title": title, "body": body, "labels": labels if labels is not None else [LABEL]}
+    with httpx.Client() as client:
+        resp = client.post(url, headers=_headers(), json=payload)
+        resp.raise_for_status()
+    return resp.json()
+
+
+def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-fingerprint") -> dict[str, dict]:
+    """Map fingerprint -> issue (open or closed) whose body contains
+    `<!-- {marker}: {fingerprint} -->`. Closed issues count: a finding that
+    was triaged/closed must not be re-filed every run. One paginated listing
+    of labelled issues, then a local scan, so N findings cost O(pages) calls."""
+    wanted = set(fingerprints)
+    found: dict[str, dict] = {}
+    if not wanted:
+        return found
+    url = f"{GITHUB_API}/repos/{_repo()}/issues"
+    page = 1
+    with httpx.Client() as client:
+        while True:
+            resp = client.get(
+                url,
+                headers=_headers(),
+                params={"labels": LABEL, "state": "all", "per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            issues = resp.json()
+            for issue in issues:
+                if "pull_request" in issue:
+                    continue
+                body = issue.get("body") or ""
+                for fp in wanted:
+                    if f"<!-- {marker}: {fp} -->" in body:
+                        found[fp] = issue
+            if len(issues) < 100:
+                break
+            page += 1
+    return found
 
 
 # --- webhooks (Webhooks: read/write) ---------------------------------------

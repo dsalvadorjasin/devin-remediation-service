@@ -259,3 +259,45 @@ def test_pr_closed_replay_does_not_requeue_running_issue(secret, enqueued, monke
     assert _post(client, "pull_request", payload).json()["issues"] == []
     assert enqueued == [(7, True)]
     assert store.get_status(7) == "running"
+
+
+def test_pr_closed_requeues_failed_issue_with_pr_url(secret, enqueued, monkeypatch):
+    """A session that errored after opening a PR is still `failed` + pr_url;
+    closing that PR must hand it back too."""
+    store.upsert(7, title="t", issue_url="u", status="failed", pr_url="https://github.com/o/r/pull/99")
+    monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
+    payload = {
+        "action": "closed",
+        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "", "body": ""},
+    }
+    assert _post(TestClient(main.app), "pull_request", payload).json()["issues"] == [7]
+    assert enqueued == [(7, True)]
+    assert not store.get(7)["pr_url"]
+
+
+def test_pr_closed_restores_pr_url_when_publish_fails(secret, enqueued, monkeypatch):
+    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
+
+    def boom(*a, **k):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(CeleryOrchestrator, "enqueue_remediation", boom)
+    payload = {
+        "action": "closed",
+        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "", "body": ""},
+    }
+    with pytest.raises(RuntimeError):
+        _post(TestClient(main.app), "pull_request", payload)
+    assert store.get(7)["pr_url"] == "https://github.com/o/r/pull/99"
+    assert store.get_status(7) == "failed"
+
+
+def test_detach_closed_pr_is_conditional():
+    store.upsert(7, title="t", issue_url="u", status="running", pr_url="https://x/1")
+    assert store.detach_closed_pr(7, "https://x/1") is False
+    store.upsert(7, status="completed")
+    assert store.detach_closed_pr(7, "https://x/other") is False
+    assert store.detach_closed_pr(7, "https://x/1") is True
+    assert store.detach_closed_pr(7, "https://x/1") is False
+    assert store.get(7)["pr_url"] == "" and store.get_status(7) == "failed"

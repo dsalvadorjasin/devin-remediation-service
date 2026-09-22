@@ -152,6 +152,28 @@ def release_poll(issue_number: int, poll_token: str | None = None) -> None:
         session.commit()
 
 
+def detach_closed_pr(issue_number: int, pr_url: str) -> bool:
+    """Atomically hand an issue back for remediation after its PR was closed
+    unmerged: only a row still pointing at ``pr_url`` and not ``running`` is
+    flipped to ``failed`` with the association cleared, so concurrent or
+    replayed deliveries cannot clobber a replacement session. Returns True if
+    this call made the transition."""
+    stmt = (
+        update(Task)
+        .where(
+            Task.repository == _repository(),
+            Task.issue_number == issue_number,
+            Task.pr_url == pr_url,
+            Task.status.in_(("completed", "failed")),
+        )
+        .values(status="failed", pr_url="", updated_at=utcnow())
+    )
+    with SessionLocal() as session:
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount == 1
+
+
 def get_unpolled_running() -> list:
     """Running sessions whose poll lease is missing or expired, i.e. whose poll
     chain was never scheduled or has been lost (worker restart, broker error)."""

@@ -110,11 +110,15 @@ def _handle_pull_request(payload: dict) -> dict:
         # PR abandoned: hand every issue that recorded this PR back to the
         # guards in process_issue, which re-check GitHub and create a fresh
         # session if needed. Keyed on the stored pr_url, not the current PR
-        # text, so edits to the PR title/body cannot hide the closure.
+        # text, so edits to the PR title/body cannot hide the closure. The
+        # transition itself is a conditional UPDATE (store.detach_closed_pr),
+        # so replays and concurrent deliveries can't requeue twice; the
+        # association is put back if the task can't be published, keeping
+        # the event replayable.
         linked = sorted(
             e["issue_number"]
             for e in store.get_all()
-            if e.get("pr_url") == pr_url and e.get("status") == "completed"
+            if e.get("pr_url") == pr_url and e.get("status") != "running"
         )
         for number in linked:
             try:
@@ -122,9 +126,15 @@ def _handle_pull_request(payload: dict) -> dict:
             except Exception as exc:
                 log.warning("Could not fetch issue #%d after PR close: %s", number, exc)
                 continue
-            if _has_label(issue) and issue.get("state") == "open":
-                store.upsert(number, status="failed", pr_url="")
+            if not (_has_label(issue) and issue.get("state") == "open"):
+                continue
+            if not store.detach_closed_pr(number, pr_url):
+                continue
+            try:
                 get_orchestrator().enqueue_remediation(_issue_summary(issue), force_retry=True)
-                touched.append(number)
+            except Exception:
+                store.upsert(number, pr_url=pr_url)
+                raise
+            touched.append(number)
 
     return {"event": "pull_request", "action": action, "issues": touched}

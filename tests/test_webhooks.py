@@ -242,3 +242,20 @@ def test_webhook_script_delete_dedupes_ids(monkeypatch):
     monkeypatch.setattr(github, "delete_webhook", deleted.append)
     assert script.main(["delete", "42", "--all-service"]) == 0
     assert deleted == [42]
+
+
+def test_pr_closed_replay_does_not_requeue_running_issue(secret, enqueued, monkeypatch):
+    """A redelivered close event must not clobber the replacement session."""
+    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
+    client = TestClient(main.app)
+    payload = {
+        "action": "closed",
+        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "Fix #7", "body": ""},
+    }
+    assert _post(client, "pull_request", payload).json()["issues"] == [7]
+    assert not store.get(7)["pr_url"]
+    store.upsert(7, status="running")
+    assert _post(client, "pull_request", payload).json()["issues"] == []
+    assert enqueued == [(7, True)]
+    assert store.get_status(7) == "running"

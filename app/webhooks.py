@@ -112,7 +112,9 @@ def _handle_pull_request(payload: dict) -> dict:
         # session if needed. Keyed on the stored pr_url, not the current PR
         # text, so edits to the PR title/body cannot hide the closure.
         linked = sorted(
-            e["issue_number"] for e in store.get_all() if e.get("pr_url") == pr_url
+            e["issue_number"]
+            for e in store.get_all()
+            if e.get("pr_url") == pr_url and e.get("status") == "completed"
         )
         for number in linked:
             try:
@@ -121,7 +123,7 @@ def _handle_pull_request(payload: dict) -> dict:
                 log.warning("Could not fetch issue #%d after PR close: %s", number, exc)
                 continue
             if _has_label(issue) and issue.get("state") == "open":
-                store.upsert(number, status="failed")
+                store.upsert(number, status="failed", pr_url="")
                 get_orchestrator().enqueue_remediation(_issue_summary(issue), force_retry=True)
                 touched.append(number)
 

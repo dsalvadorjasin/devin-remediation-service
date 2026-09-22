@@ -67,6 +67,10 @@ jobs:
             echo "REMEDIATION_INGEST_URL not set; skipping POST"
             exit 0
           fi
+          case "${INGEST_URL}" in
+            https://*) ;;
+            *) echo "REMEDIATION_INGEST_URL must be https:// (bearer token would be sent in clear)" >&2; exit 1 ;;
+          esac
           curl --fail-with-body -sS -X POST \
             "${INGEST_URL}?dry_run=${DRY_RUN:-false}" \
             -H "Authorization: Bearer ${INGEST_TOKEN}" \

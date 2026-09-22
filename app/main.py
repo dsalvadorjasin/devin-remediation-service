@@ -127,6 +127,16 @@ def _check_ingest_token(authorization: str | None, x_ingest_token: str | None) -
         raise HTTPException(status_code=401, detail="invalid ingest token")
 
 
+def _ingest_sarif_body(body: bytes, dry_run: bool) -> dict | None:
+    try:
+        sarif = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(sarif, dict):
+        return None
+    return ingest_findings(parse_sarif(sarif), dry_run=dry_run)
+
+
 @app.post("/ingest/semgrep")
 async def ingest_semgrep(
     request: Request,
@@ -152,12 +162,11 @@ async def ingest_semgrep(
     if not body.strip():
         get_orchestrator().enqueue_discovery(dry_run=dry_run)
         return JSONResponse(content={"ok": True, "enqueued": True, "dry_run": dry_run})
-    try:
-        sarif = json.loads(body)
-    except json.JSONDecodeError:
+    # Decoding + parsing a report of up to MAX_SARIF_BYTES is CPU-bound; keep
+    # it off the event loop together with the GitHub calls.
+    result = await run_in_threadpool(_ingest_sarif_body, body, dry_run)
+    if result is None:
         raise HTTPException(status_code=400, detail="body must be SARIF JSON")
-    findings = parse_sarif(sarif)
-    result = await run_in_threadpool(ingest_findings, findings, dry_run=dry_run)
     if result["created"] and not dry_run:
         get_orchestrator().enqueue_scan(force_retry=False)
     return JSONResponse(content={"ok": True, "dry_run": dry_run, **result})

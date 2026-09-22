@@ -227,3 +227,16 @@ def test_ingest_endpoint_rejects_non_json(ingest_token):
     client = TestClient(main.app)
     resp = client.post("/ingest/semgrep", content=b"not json", headers={"Authorization": f"Bearer {TOKEN}"})
     assert resp.status_code == 400
+
+
+def test_discovery_task_enqueues_scan_when_issues_created(monkeypatch):
+    from app import tasks
+    from app.discovery import semgrep as semgrep_mod
+
+    monkeypatch.setattr(semgrep_mod.SemgrepDiscoverySource, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(semgrep_mod.SemgrepDiscoverySource, "discover", lambda self: [])
+    monkeypatch.setattr("app.discovery.ingest_findings", lambda findings, dry_run=False: {"created": [{"number": 1}], "skipped": []})
+    calls = []
+    monkeypatch.setattr(CeleryOrchestrator, "enqueue_scan", lambda self, force_retry=False: calls.append(force_retry))
+    assert tasks.discovery_task()["created"]
+    assert calls == [False]

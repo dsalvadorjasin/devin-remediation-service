@@ -35,6 +35,8 @@ def discovery_task(dry_run: bool = False) -> dict:
     findings = SemgrepDiscoverySource().discover()
     result = ingest_findings(findings, dry_run=dry_run)
     if result["created"] and not dry_run:
+        from app.orchestrator import get_orchestrator
+
         get_orchestrator().enqueue_scan(force_retry=False)
     return result
 

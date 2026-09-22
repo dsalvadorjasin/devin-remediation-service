@@ -253,3 +253,17 @@ def test_scan_env_drops_service_credentials(monkeypatch):
     assert env["SEMGREP_CONFIG"] == "p/ci"
     assert env["PATH"] == "/usr/bin"
     assert not {k for k in env if k in ("GITHUB_TOKEN", "DEVIN_API_KEY", "DATABASE_URL", "CELERY_BROKER_URL", "INGEST_TOKEN", "GITHUB_WEBHOOK_SECRET")}
+
+
+def test_scan_env_keeps_proxy_and_ca_settings(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:8080")
+    monkeypatch.setenv("no_proxy", "localhost")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/corp.pem")
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+
+    env = SemgrepDiscoverySource.scan_env()
+
+    assert env["HTTPS_PROXY"] == "http://proxy.internal:8080"
+    assert env["no_proxy"] == "localhost"
+    assert env["SSL_CERT_FILE"] == "/etc/ssl/corp.pem"
+    assert "GITHUB_TOKEN" not in env

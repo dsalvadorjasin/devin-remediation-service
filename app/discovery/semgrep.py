@@ -113,12 +113,14 @@ class SemgrepDiscoverySource(DiscoverySource):
     def scan_env() -> dict[str, str]:
         """Environment for the scanner subprocess: only what semgrep needs, none of
         the worker's service credentials (GitHub, Devin, database, broker)."""
-        keep = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CACHE_HOME")
-        return {
-            k: v
-            for k, v in os.environ.items()
-            if k in keep or k.startswith("SEMGREP_")
+        keep = {
+            "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CACHE_HOME",
+            # registry/rule downloads must still honour the worker's egress settings
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
         }
+        return {k: v for k, v in os.environ.items() if k in keep or k.startswith("SEMGREP_")}
 
     def run_semgrep(self, target: Path) -> dict:
         semgrep = shutil.which("semgrep") or "semgrep"

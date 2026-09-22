@@ -301,3 +301,14 @@ def test_detach_closed_pr_is_conditional():
     assert store.detach_closed_pr(7, "https://x/1") is True
     assert store.detach_closed_pr(7, "https://x/1") is False
     assert store.get(7)["pr_url"] == "" and store.get_status(7) == "failed"
+
+
+def test_reattach_closed_pr_skips_replacement_state():
+    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://x/1")
+    assert store.detach_closed_pr(7, "https://x/1")
+    store.upsert(7, status="running")
+    assert store.reattach_closed_pr(7, "https://x/1") is False
+    assert store.get(7)["pr_url"] == ""
+    store.upsert(7, status="failed")
+    assert store.reattach_closed_pr(7, "https://x/1") is True
+    assert store.get(7)["pr_url"] == "https://x/1"

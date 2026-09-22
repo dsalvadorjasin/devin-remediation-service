@@ -174,6 +174,26 @@ def detach_closed_pr(issue_number: int, pr_url: str) -> bool:
         return result.rowcount == 1
 
 
+def reattach_closed_pr(issue_number: int, pr_url: str) -> bool:
+    """Undo ``detach_closed_pr`` when the retry could not be published. Only
+    touches a row that is still exactly as the detach left it (``failed`` with
+    no PR), so a replacement that started meanwhile is left alone."""
+    stmt = (
+        update(Task)
+        .where(
+            Task.repository == _repository(),
+            Task.issue_number == issue_number,
+            Task.status == "failed",
+            Task.pr_url == "",
+        )
+        .values(pr_url=pr_url, updated_at=utcnow())
+    )
+    with SessionLocal() as session:
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount == 1
+
+
 def get_unpolled_running() -> list:
     """Running sessions whose poll lease is missing or expired, i.e. whose poll
     chain was never scheduled or has been lost (worker restart, broker error)."""

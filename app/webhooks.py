@@ -133,7 +133,7 @@ def _handle_pull_request(payload: dict) -> dict:
             try:
                 get_orchestrator().enqueue_remediation(_issue_summary(issue), force_retry=True)
             except Exception:
-                store.upsert(number, pr_url=pr_url)
+                store.reattach_closed_pr(number, pr_url)
                 raise
             touched.append(number)
 

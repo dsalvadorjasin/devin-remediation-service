@@ -14,8 +14,8 @@ BASE="$(cd "$(dirname "$0")" && pwd)"
 
 # Both values are interpolated into YAML below: restrict them to the OCI
 # reference / DNS-label alphabets so they cannot smuggle in extra YAML.
-printf '%s' "$IMAGE" | grep -Eq '^[A-Za-z0-9._/:@-]+$' || { echo "invalid image reference: $IMAGE" >&2; exit 2; }
-printf '%s' "$NS" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' || { echo "invalid namespace: $NS" >&2; exit 2; }
+[ -n "$(printf '%s' "$IMAGE" | tr -d 'A-Za-z0-9._/:@-')" ] && { echo "invalid image reference" >&2; exit 2; }
+[ -n "$(printf '%s' "$NS" | tr -d 'a-z0-9-')" ] || [ ${#NS} -gt 63 ] && { echo "invalid namespace" >&2; exit 2; }
 
 case "$IMAGE" in
   *@sha256:*) NAME="${IMAGE%@*}"; REF="digest: ${IMAGE#*@}" ;;

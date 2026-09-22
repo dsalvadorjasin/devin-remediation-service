@@ -84,13 +84,11 @@ class SemgrepDiscoverySource(DiscoverySource):
         checkout_dir: str | None = None,
         config: str | None = None,
         token: str | None = None,
-        max_findings: int | None = None,
     ):
         self.repo = repo or os.environ["GITHUB_REPO"]
         self.checkout_dir = Path(checkout_dir or os.getenv("SEMGREP_CHECKOUT_DIR", DEFAULT_CHECKOUT_DIR))
         self.config = config or os.getenv("SEMGREP_CONFIG", DEFAULT_CONFIG)
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "")
-        self.max_findings = max_findings or int(os.getenv("SEMGREP_MAX_FINDINGS", "0")) or None
 
     def _clone_url(self) -> str:
         auth = f"x-access-token:{self.token}@" if self.token else ""
@@ -138,7 +136,5 @@ class SemgrepDiscoverySource(DiscoverySource):
             Finding(**{**f.to_dict(), "file_path": f.file_path.removeprefix(prefix).removeprefix("file://")})
             for f in findings
         ]
-        if self.max_findings:
-            findings = findings[: self.max_findings]
         log.info("Semgrep produced %d finding(s)", len(findings))
         return findings

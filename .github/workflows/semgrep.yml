@@ -41,7 +41,15 @@ jobs:
           fetch-depth: 1
 
       - name: Run Semgrep (SARIF)
-        run: semgrep scan --config p/default --sarif --output semgrep.sarif --metrics=off || true
+        # Exit 1 = findings present (expected); anything else is a scanner error.
+        run: |
+          semgrep scan --config p/default --sarif --output semgrep.sarif --metrics=off
+          rc=$?
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "semgrep failed with exit code $rc" >&2
+            exit "$rc"
+          fi
+        shell: bash {0}
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4

@@ -73,13 +73,13 @@ def test_fingerprint_stable_under_small_line_shift_and_whitespace():
 
 
 def test_discover_strips_checkout_prefix(monkeypatch, sarif, tmp_path):
-    src = SemgrepDiscoverySource(repo="o/r", checkout_dir=str(tmp_path), token="", max_findings=1)
+    src = SemgrepDiscoverySource(repo="o/r", checkout_dir=str(tmp_path), token="")
     monkeypatch.setattr(src, "update_checkout", lambda: tmp_path)
     for res in sarif["runs"][0]["results"]:
         res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = f"{tmp_path}/" + res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
     monkeypatch.setattr(src, "run_semgrep", lambda target: sarif)
     findings = src.discover()
-    assert len(findings) == 1
+    assert len(findings) == 2
     assert findings[0].file_path == "superset/utils/shell.py"
 
 
@@ -97,7 +97,7 @@ def test_create_issue_posts_with_label(httpx_mock):
 def test_find_issues_by_fingerprint(httpx_mock):
     httpx_mock.add_response(
         method="GET",
-        url=f"{ISSUES_URL}?labels={github.LABEL}&state=open&per_page=100&page=1",
+        url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1",
         json=[
             {"number": 1, "body": f"x <!-- {FINGERPRINT_MARKER}: aaa -->"},
             {"number": 2, "body": "no marker"},
@@ -126,6 +126,51 @@ def test_ingest_findings_dedups_existing_and_duplicates(monkeypatch, sarif):
     assert created == [findings[1].title]
 
 
+def test_ingest_findings_cap_applies_after_dedup(monkeypatch, sarif):
+    """SEMGREP_MAX_FINDINGS caps *new* issues per run; already-filed findings
+    must not eat the budget, otherwise later findings are never reached."""
+    findings = parse_sarif(sarif)
+    monkeypatch.setattr(github, "find_issues_by_fingerprint", lambda fps: {findings[0].fingerprint: {"number": 1}})
+    created = []
+    monkeypatch.setattr(github, "create_issue", lambda t, b, labels=None: created.append(t) or {"number": 1, "html_url": "u"})
+    monkeypatch.setenv("SEMGREP_MAX_FINDINGS", "1")
+    result = ingest_findings(findings)
+    assert created == [findings[1].title]
+    assert result["skipped"] == 1
+    assert len(ingest_findings(findings, max_new=0)["created"]) == 0
+
+
+def test_issue_body_neutralises_untrusted_markdown():
+    f = Finding(
+        rule_id="r`x",
+        message="hi @octocat see ```",
+        severity="HIGH",
+        file_path="a/b.py",
+        start_line=3,
+        snippet="```\n@everyone pwned\n```",
+    )
+    body = f.issue_body()
+    assert "`` r`x ``" in body
+    assert "@octocat" not in body and "@\u200boctocat" in body
+    assert "@everyone" in body  # inside the code block, so inert
+    assert body.count("````") == 2  # snippet fence is longer than any run inside it
+    assert body.rstrip().endswith(f.marker)
+
+
+def test_ingest_endpoint_rejects_oversized_body(ingest_token, monkeypatch):
+    from app import discovery
+
+    monkeypatch.setattr(discovery.base, "MAX_SARIF_BYTES", 10)
+    monkeypatch.setattr(main, "MAX_SARIF_BYTES", 10)
+    client = TestClient(main.app)
+    resp = client.post("/ingest/semgrep", content=b"{" + b" " * 20 + b"}", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status_code == 413
+    resp = client.post(
+        "/ingest/semgrep", content=b"{}", headers={"Authorization": f"Bearer {TOKEN}", "Content-Length": "2"}
+    )
+    assert resp.status_code != 413
+
+
 # --- POST /ingest/semgrep ---------------------------------------------------
 
 
@@ -142,7 +187,7 @@ def test_ingest_endpoint_503_without_token_configured(monkeypatch):
 
 
 def test_ingest_endpoint_accepts_sarif_and_creates_issues(ingest_token, orchestrator_calls, httpx_mock, sarif):
-    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=open&per_page=100&page=1", json=[])
+    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1", json=[])
     httpx_mock.add_response(method="POST", url=ISSUES_URL, json={"number": 11, "html_url": "u11"})
     httpx_mock.add_response(method="POST", url=ISSUES_URL, json={"number": 12, "html_url": "u12"})
     client = TestClient(main.app)
@@ -161,7 +206,7 @@ def test_ingest_endpoint_accepts_sarif_and_creates_issues(ingest_token, orchestr
 
 
 def test_ingest_endpoint_dry_run_creates_nothing(ingest_token, orchestrator_calls, httpx_mock, sarif):
-    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=open&per_page=100&page=1", json=[])
+    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1", json=[])
     client = TestClient(main.app)
     resp = client.post("/ingest/semgrep?dry_run=true", json=sarif, headers={"X-Ingest-Token": TOKEN})
     assert resp.status_code == 200

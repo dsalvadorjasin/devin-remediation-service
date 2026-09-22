@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 load_dotenv()
 
 from app import db, store, webhooks
-from app.discovery import ingest_findings, parse_sarif
+from app.discovery import MAX_SARIF_BYTES, ingest_findings, parse_sarif
 from app.orchestrator import get_orchestrator
 from app.remediation import process_issue, scan_and_process  # noqa: F401 (re-exported)
 
@@ -133,6 +133,7 @@ async def ingest_semgrep(
     dry_run: bool = False,
     authorization: str | None = Header(default=None),
     x_ingest_token: str | None = Header(default=None),
+    content_length: int | None = Header(default=None),
 ):
     """
     Two modes:
@@ -141,7 +142,13 @@ async def ingest_semgrep(
     - Empty body -> enqueue a full discovery run (clone + semgrep) on a worker.
     """
     _check_ingest_token(authorization, x_ingest_token)
+    if content_length is None:
+        raise HTTPException(status_code=411, detail="Content-Length required")
+    if content_length > MAX_SARIF_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
     body = await request.body()
+    if len(body) > MAX_SARIF_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
     if not body.strip():
         get_orchestrator().enqueue_discovery(dry_run=dry_run)
         return JSONResponse(content={"ok": True, "enqueued": True, "dry_run": dry_run})
@@ -150,7 +157,7 @@ async def ingest_semgrep(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="body must be SARIF JSON")
     findings = parse_sarif(sarif)
-    result = ingest_findings(findings, dry_run=dry_run)
+    result = await run_in_threadpool(ingest_findings, findings, dry_run=dry_run)
     if result["created"] and not dry_run:
         get_orchestrator().enqueue_scan(force_retry=False)
     return JSONResponse(content={"ok": True, "dry_run": dry_run, **result})

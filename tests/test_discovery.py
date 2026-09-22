@@ -161,7 +161,9 @@ def test_ingest_endpoint_rejects_oversized_body(ingest_token, monkeypatch):
     from app import discovery
 
     monkeypatch.setattr(discovery.base, "MAX_SARIF_BYTES", 10)
-    monkeypatch.setattr(main, "MAX_SARIF_BYTES", 10)
+    from app.api import ingest as ingest_api
+
+    monkeypatch.setattr(ingest_api, "MAX_SARIF_BYTES", 10)
     client = TestClient(main.app)
     resp = client.post("/ingest/semgrep", content=b"{" + b" " * 20 + b"}", headers={"Authorization": f"Bearer {TOKEN}"})
     assert resp.status_code == 413

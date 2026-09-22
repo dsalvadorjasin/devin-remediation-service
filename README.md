@@ -50,7 +50,7 @@ SEMGREP_SCAN_INTERVAL_MINUTES=60
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis URLs used by Celery. Defaults point at the `redis` service in `docker-compose.yml`.
 - `ORCHESTRATOR` — which `Orchestrator` implementation dispatches work. Only `celery` exists today.
 - `GITHUB_WEBHOOK_SECRET` — self-generated shared secret for HMAC (`X-Hub-Signature-256`) verification of webhook deliveries. If unset, `POST /webhooks/github` returns 503 and the service runs on the reconciliation scan alone.
-- `INGEST_TOKEN` — self-generated bearer token for `POST /ingest/semgrep` (`Authorization: Bearer ...` or `X-Ingest-Token`). Unset -> 503.
+- `INGEST_TOKEN` — self-generated bearer token for `POST /ingest/semgrep` and `POST /scan` (`Authorization: Bearer ...` or `X-Ingest-Token`). Unset -> 503. The dashboard prompts for it once per browser session before triggering a scan.
 - `SEMGREP_SCAN_INTERVAL_MINUTES` — Beat interval for the Semgrep discovery task. Optional tuning: `SEMGREP_CONFIG` (default `p/default`), `SEMGREP_CHECKOUT_DIR`, `SEMGREP_MAX_FINDINGS` (cap issues filed per run; `0` = unlimited).
 - `DEVIN_API_KEY` — API key for Devin (starts with `cog_`), which you can generate following the instructions [here](https://docs.devin.ai/api-reference/getting-started/teams-quickstart#step-2-generate-an-api-key).
 - `DEVIN_ORG_ID` - Organization ID for Devin (starts with `org-`), which you can find under `Settings -> General` in [app.devin.ai](app.devin.ai).
@@ -67,15 +67,19 @@ Install Docker Desktop and run the following command in the project root:
 docker compose up --build
 ```
 
-This starts five containers:
+This starts the following containers (all app containers are built from the same image and differ only by command):
 
 | Service | Image | Role |
 |---|---|---|
-| `app` | this repo | FastAPI API + dashboard; runs `alembic upgrade head` then uvicorn |
-| `worker` | this repo | `celery worker` executing scan / remediate / poll tasks |
-| `beat` | this repo | `celery beat` scheduling the periodic reconciliation scan |
+| `migrate` | this repo | one-shot `alembic upgrade head`; the app services wait for it |
+| `api` | this repo | FastAPI ingest/API service + dashboard on `:8000`. Never calls Devin; only enqueues. |
+| `ingest-worker` | this repo | `celery worker -Q ingest`: `scan_task` (GitHub listing) and `discovery_task` (clone + Semgrep) |
+| `devin-worker` | this repo | `celery worker -Q devin`: `remediate_issue_task` (`devin.create_session`) and `poll_session_task` (status polling) |
+| `beat` | this repo | `celery beat`: reconciliation scan + Semgrep discovery schedule (run exactly one) |
 | `redis` | `redis:7-alpine` | Celery broker + result backend |
 | `postgres` | `postgres:16-alpine` | Task state, persistent `pgdata` volume |
+
+Scale a tier independently, e.g. `docker compose up --scale devin-worker=3`. `GET /healthz` checks database connectivity and backs the compose/k8s health probes.
 
 The dashboard will be available at **http://localhost:8000**.
 At startup, the app enqueues a scan for open issues labelled `devin-remediate` in the target repository.
@@ -92,8 +96,11 @@ uv sync
 uv run pytest
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 # in separate terminals, with a local Redis on localhost:6379:
-uv run celery -A app.celery_app:celery_app worker --loglevel=info
+uv run celery -A app.celery_app:celery_app worker -Q ingest --loglevel=info
+uv run celery -A app.celery_app:celery_app worker -Q devin --loglevel=info
 uv run celery -A app.celery_app:celery_app beat --loglevel=info
+# or a single worker consuming both queues during development:
+uv run celery -A app.celery_app:celery_app worker -Q ingest,devin --loglevel=info
 ```
 
 `uv sync` installs the runtime dependencies and the `dev` dependency group (which includes the test tools). `uv run pytest` runs the test suite, and `uv run uvicorn app.main:app` starts the local dashboard at **http://localhost:8000**.
@@ -116,6 +123,19 @@ docker run -d --rm --name pgtest -e POSTGRES_USER=u -e POSTGRES_PASSWORD=pw -e P
 DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run alembic upgrade head
 TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 ```
+
+### Kubernetes (optional)
+
+`k8s/` contains a kustomize base with the same topology: `remediation-api` (Deployment + Service + Ingress), `remediation-ingest-worker`, `remediation-devin-worker`, `remediation-beat` (replicas=1, `Recreate`), a `remediation-migrate` Job, plus `redis` and a `postgres` StatefulSet. Non-secret config lives in `configmap.yaml`. The `remediation-secrets` Secret is **not** part of the kustomize base (`secret.example.yaml` only documents the expected keys) and must be created out of band:
+
+```bash
+kubectl create namespace devin-remediation
+kubectl -n devin-remediation create secret generic remediation-secrets --from-env-file=.env  # incl. POSTGRES_PASSWORD + DATABASE_URL
+# set your image in `images:` and the Ingress host / TLS secret (or cert-manager issuer) in api.yaml, then:
+k8s/deploy.sh ghcr.io/<org>/devin-remediation-service:<unique-tag-or-digest> devin-remediation
+```
+
+Releases go through `k8s/deploy.sh <image-ref> [namespace]`: it renders a temporary kustomize overlay pinning that namespace and an immutable image (unique tag or digest; `:latest` is refused since re-applying it never triggers a rollout), deletes the previous (immutable) `remediation-migrate` Job, applies the overlay, waits for the new Job to complete, then waits for the rollouts. Each workload additionally has a `wait-for-migrations` init container that blocks until `alembic current` reports head, so new pods never start against an old schema even if the script is bypassed. Redis runs as a StatefulSet with AOF persistence so queued Celery messages survive a pod replacement; Postgres takes its password (and the app its `DATABASE_URL`) from `remediation-secrets`, not the ConfigMap. The Ingress forces HTTPS (`ssl-redirect`) and expects a certificate in `remediation-api-tls`; webhook and ingest secrets must never travel over plain HTTP.
 
 ## Architecture decisions
 
@@ -158,13 +178,34 @@ uv run python scripts/webhook.py list
 uv run python scripts/webhook.py delete --all-service   # tunnel is ephemeral: always clean up
 ```
 
-**Celery behind a swappable orchestrator.** All background work (scans, per-issue remediation, per-session polling) runs as Celery tasks (`app/tasks.py`) on Redis. The API never talks to Celery directly: it calls `app.orchestrator.get_orchestrator()`, which returns an implementation of the abstract `Orchestrator` interface (`enqueue_scan`, `enqueue_remediation`, `schedule_poll`). `CeleryOrchestrator` is the only implementation today; a future `TemporalOrchestrator` can implement the same three methods (with a durable timer replacing the self-re-queuing poll task) without touching routes or the `app/devin.py` / `app/github.py` clients. Business logic lives in `app/remediation.py` and is scheduler-agnostic.
+**Service split along the orchestrator seam.** `app/main.py` mounts two routers: `app/api/read.py` (`GET /`, `/status`, `/status/{n}`, `/healthz` — pure reads, where the Phase 6 SPA attaches) and `app/api/ingest.py` (`POST /scan`, `/webhooks/github`, `/ingest/semgrep` — authenticate, then hand off to the `Orchestrator`). Celery `task_routes` split the tasks across two queues so each deployable owns one concern: the **ingest worker** (`-Q ingest`) talks to GitHub and runs Semgrep; the **Devin worker** (`-Q devin`) is the only process holding a conversation with the Devin API (`create_session` + polling). They share nothing but Redis (broker) and Postgres (state). Because routes only see the `Orchestrator` interface, swapping Celery for Temporal changes neither the API service nor the worker entrypoints' business logic.
+
+**Celery behind a swappable orchestrator.** All background work (scans, per-issue remediation, per-session polling) runs as Celery tasks (`app/tasks.py`) on Redis. The API never talks to Celery directly: it calls `app.orchestrator.get_orchestrator()`, which returns an implementation of the abstract `Orchestrator` interface (`enqueue_scan`, `enqueue_remediation`, `enqueue_discovery`, `schedule_poll`). `CeleryOrchestrator` is the only implementation today; a future `TemporalOrchestrator` can implement the same four methods (with a durable timer replacing the self-re-queuing poll task) without touching routes or the `app/devin.py` / `app/github.py` clients. Business logic lives in `app/remediation.py` and is scheduler-agnostic.
+
+## Delivery: stacked PRs and roadmap
+
+This service was built as five stacked PRs, each branched off the previous one (merge bottom-up; when a lower PR changes, rebase the ones above it):
+
+| # | Branch | Base | Phase |
+|---|---|---|---|
+| 1 | `phase-1-postgres` | `main` | PostgreSQL persistence via SQLAlchemy + Alembic |
+| 2 | `phase-2-celery` | `phase-1-postgres` | Celery worker/beat behind the `Orchestrator` interface |
+| 3 | `phase-3-webhooks` | `phase-2-celery` | GitHub webhook ingestion (HMAC) + reconciliation scan |
+| 4 | `phase-4-semgrep` | `phase-3-webhooks` | Semgrep discovery source, fingerprint-deduped issue creation, `/ingest/semgrep` |
+| 5 | `phase-5-microservices` | `phase-4-semgrep` | api / ingest-worker / devin-worker split, compose + k8s |
+
+**Temporal upgrade path.** Implement `TemporalOrchestrator(Orchestrator)` in `app/orchestrator/` (`enqueue_scan`, `enqueue_remediation`, `enqueue_discovery`, `schedule_poll` — the last one becomes a durable workflow timer instead of a self-re-queuing task), register it in `get_orchestrator()` under `ORCHESTRATOR=temporal`, and replace the Celery worker deployables with Temporal workers running the same `app/remediation.py` functions as activities. Routes, clients and the store are untouched.
+
+**Follow-up sessions (not in this repo yet):** Phase 6 — SPA replacing `templates/index.html` on top of `app/api/read.py`, plus e2e tests; Phase 7 — hardening and CI (lint/typecheck, image build/publish, deploy); Phase 8 — Devin Security Swarm.
 
 ## Project structure
 
 ```bash
 app/
-├── main.py         # FastAPI app, startup (enqueues initial scan), routes
+├── main.py         # FastAPI app for the api service: startup (enqueues initial scan), mounts routers
+├── api/
+│   ├── read.py      # GET /, /status, /status/{n}, /healthz (read layer for the future SPA)
+│   └── ingest.py    # POST /scan, /webhooks/github, /ingest/semgrep (hand off to Orchestrator)
 ├── remediation.py  # Scheduler-agnostic business logic (scan, process issue, poll session)
 ├── celery_app.py   # Celery app + Beat schedule, configured from env
 ├── tasks.py        # Celery task wrappers around app/remediation.py
@@ -188,9 +229,10 @@ scripts/webhook.py  # register / list / delete the repo webhook at runtime
 .github/workflows/
 ├── tests.yml       # uv sync + pytest
 └── semgrep.yml     # cron/workflow_dispatch Semgrep -> SARIF -> POST /ingest/semgrep
+k8s/                # kustomize manifests: api, ingest-worker, devin-worker, beat, migrate job, redis, postgres
 alembic.ini
-Dockerfile
-docker-compose.yml
+Dockerfile          # one image; compose/k8s pick the command per service
+docker-compose.yml  # migrate, api, ingest-worker, devin-worker, beat, redis, postgres
 pyproject.toml
 uv.lock
 .env.example

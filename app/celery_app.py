@@ -43,6 +43,16 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     broker_connection_retry_on_startup=True,
+    # Two deployables share one codebase and are separated by queue:
+    #   ingest-worker: `celery worker -Q ingest`  (GitHub listing, Semgrep)
+    #   devin-worker:  `celery worker -Q devin`   (session creation + polling)
+    task_default_queue="ingest",
+    task_routes={
+        "app.tasks.scan_task": {"queue": "ingest"},
+        "app.tasks.discovery_task": {"queue": "ingest"},
+        "app.tasks.remediate_issue_task": {"queue": "devin"},
+        "app.tasks.poll_session_task": {"queue": "devin"},
+    },
     beat_schedule={
         "reconciliation-scan": {
             "task": "app.tasks.scan_task",

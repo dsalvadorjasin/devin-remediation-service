@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: remediation-config
+data:
+  GITHUB_REPO: dsalvadorjasin/superset
+  SCAN_INTERVAL_MINUTES: "5"
+  SEMGREP_SCAN_INTERVAL_MINUTES: "60"
+  SEMGREP_CONFIG: p/default
+  SEMGREP_CHECKOUT_DIR: /checkout/repo
+  SEMGREP_MAX_FINDINGS: "0"
+  ORCHESTRATOR: celery
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1

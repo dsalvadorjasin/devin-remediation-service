@@ -17,4 +17,7 @@ RUN uv sync --locked --no-dev --no-editable
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Default: the API service. Other deployables override the command
+# (see docker-compose.yml / k8s/): celery worker -Q ingest | -Q devin | beat.
+# Migrations run as a separate one-shot `alembic upgrade head` container/job.
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

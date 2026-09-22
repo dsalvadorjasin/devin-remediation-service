@@ -7,7 +7,7 @@ unchanged from the original in-memory implementation.
 
 import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import or_, select, update
 
@@ -150,6 +150,52 @@ def release_poll(issue_number: int, poll_token: str | None = None) -> None:
     with SessionLocal() as session:
         session.execute(stmt)
         session.commit()
+
+
+def detach_closed_pr(issue_number: int, pr_url: str) -> datetime | None:
+    """Atomically hand an issue back for remediation after its PR was closed
+    unmerged: only a row still pointing at ``pr_url`` and not ``running`` is
+    flipped to ``failed`` with the association cleared, so concurrent or
+    replayed deliveries cannot clobber a replacement session. Returns the
+    ``updated_at`` stamp written by this transition (the compensation token
+    for ``reattach_closed_pr``), or None if no row matched."""
+    stamp = utcnow()
+    stmt = (
+        update(Task)
+        .where(
+            Task.repository == _repository(),
+            Task.issue_number == issue_number,
+            Task.pr_url == pr_url,
+            Task.status.in_(("completed", "failed")),
+        )
+        .values(status="failed", pr_url="", updated_at=stamp)
+    )
+    with SessionLocal() as session:
+        result = session.execute(stmt)
+        session.commit()
+        return stamp if result.rowcount == 1 else None
+
+
+def reattach_closed_pr(issue_number: int, pr_url: str, token: datetime) -> bool:
+    """Undo ``detach_closed_pr`` when the retry could not be published. Only
+    touches a row whose ``updated_at`` still equals the detach stamp, so any
+    intervening write (a replacement starting, failing, or recording a new
+    PR) permanently invalidates the compensation."""
+    stmt = (
+        update(Task)
+        .where(
+            Task.repository == _repository(),
+            Task.issue_number == issue_number,
+            Task.status == "failed",
+            Task.pr_url == "",
+            Task.updated_at == token,
+        )
+        .values(pr_url=pr_url, updated_at=utcnow())
+    )
+    with SessionLocal() as session:
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount == 1
 
 
 def get_unpolled_running() -> list:

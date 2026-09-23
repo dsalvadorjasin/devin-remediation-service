@@ -209,7 +209,13 @@ def test_process_issue_skips_when_running(monkeypatch):
         "body": "Details",
         "html_url": "https://example.com/issues/3",
     }
-    store.upsert(3, title="Fix bug", issue_url="https://example.com/issues/3", status="running")
+    store.upsert(
+        3,
+        title="Fix bug",
+        issue_url="https://example.com/issues/3",
+        status="running",
+        session_id="sess-3",
+    )
     monkeypatch.setattr(github, "find_existing_pr", lambda number: None)
     create_session_calls = []
     monkeypatch.setattr(

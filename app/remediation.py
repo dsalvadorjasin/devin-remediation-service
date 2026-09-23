@@ -20,6 +20,11 @@ from app.orchestrator.base import POLL_INTERVAL_SECONDS, POLL_LEASE_GRACE_SECOND
 
 log = logging.getLogger(__name__)
 
+# How long a remediation claim (row `running` with no session yet) stays
+# reserved before the reconciliation scan may hand the issue to a new task.
+# Must comfortably exceed a Devin create_session round trip including retries.
+CREATE_LEASE_SECONDS = 10 * 60
+
 
 def _lease_seconds(delay_seconds: int) -> int:
     return delay_seconds + POLL_LEASE_GRACE_SECONDS
@@ -72,6 +77,12 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     - failed → skip unless force_retry=True.
     - not in store, or completed with no open PR → create session.
 
+    The final gate is ``store.claim_remediation``, a single atomic statement,
+    so overlapping tasks for the same issue (replica startup scans, Beat,
+    /scan, webhook redeliveries) can never both reach ``create_session``.
+    A stranded claim (worker died before saving the session) expires after
+    CREATE_LEASE_SECONDS and is then re-claimable.
+
     Returns True when a session was created (and a poll scheduled).
     """
     # for valid keys in response, check GitHub API docs:
@@ -93,17 +104,20 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
         )
         return False
 
-    # 2. Currently running → never spawn a duplicate
-    if current_status == "running":
-        return False
+    # 2. Currently running → never spawn a duplicate. Enforced by the atomic
+    # claim below, which only lets a stranded claim (no session, expired
+    # creation lease) through.
 
     # 3. Failed → only retry when explicitly requested
     if current_status == "failed" and not force_retry:
         return False
 
-    # 4. Create a new Devin session, posting a comment on the issue with the session URL.
+    # 4. Atomically claim the issue, then create a Devin session and post a
+    # comment on the issue with the session URL.
+    if not store.claim_remediation(number, title, issue_url, CREATE_LEASE_SECONDS):
+        log.info("Issue #%d already claimed by another remediation task — skipping", number)
+        return False
     log.info("Creating Devin session for issue #%d: %s", number, title)
-    store.upsert(number, title=title, issue_url=issue_url, status="running")
     try:
         result = devin.create_session(number, title, body)
         session_id = result.get("session_id") or result.get("id")
@@ -122,6 +136,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     except Exception as exc:
         log.error("Failed to create Devin session for issue #%d: %s", number, exc)
         store.upsert(number, status="failed")
+        store.release_poll(number)
         return False
 
     if session_id:

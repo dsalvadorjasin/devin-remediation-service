@@ -9,7 +9,10 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, Task, utcnow
 
@@ -56,6 +59,78 @@ def upsert(issue_number: int, **kwargs) -> dict:
         session.commit()
         session.refresh(task)
         return task.to_dict()
+
+
+def claim_remediation(issue_number: int, title: str, issue_url: str, lease_seconds: int) -> bool:
+    """Atomically reserve the right to create a Devin session for an issue.
+
+    Exactly one caller wins when several remediation tasks for the same issue
+    overlap (replica startup scans, Beat reconciliation, manual /scan, webhook
+    redeliveries). The winner's row is left ``running`` with no ``session_id``
+    and a short creation lease in ``poll_lease_until``; the caller must then
+    record the session (``upsert``) or mark the row ``failed``. A row that is
+    ``running`` without a session whose lease has expired is a stranded
+    delivery (worker died between the claim and saving the session) and can
+    be re-claimed. Rows with a live session are never re-claimed.
+    """
+    repository = _repository()
+    now = utcnow()
+    lease_until = now + timedelta(seconds=lease_seconds)
+    with SessionLocal() as session:
+        if _try_insert_claim(session, repository, issue_number, title, issue_url, now, lease_until):
+            session.commit()
+            return True
+        result = session.execute(
+            update(Task)
+            .where(
+                Task.repository == repository,
+                Task.issue_number == issue_number,
+                or_(
+                    Task.status != "running",
+                    and_(
+                        Task.session_id.is_(None),
+                        or_(Task.poll_lease_until.is_(None), Task.poll_lease_until < now),
+                    ),
+                ),
+            )
+            .values(
+                title=title,
+                issue_url=issue_url,
+                status="running",
+                session_id=None,
+                session_url=None,
+                pr_url=None,
+                poll_token=None,
+                poll_lease_until=lease_until,
+                updated_at=now,
+            )
+        )
+        session.commit()
+        return result.rowcount == 1
+
+
+def _try_insert_claim(
+    session: Session,
+    repository: str,
+    issue_number: int,
+    title: str,
+    issue_url: str,
+    now: datetime,
+    lease_until: datetime,
+) -> bool:
+    values = {
+        "repository": repository,
+        "issue_number": issue_number,
+        "title": title,
+        "issue_url": issue_url,
+        "status": "running",
+        "poll_lease_until": lease_until,
+        "created_at": now,
+        "updated_at": now,
+    }
+    insert = pg_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    stmt = insert(Task).values(**values).on_conflict_do_nothing().returning(Task.issue_number)
+    return session.execute(stmt).first() is not None
 
 
 def get(issue_number: int) -> dict | None:

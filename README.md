@@ -12,7 +12,7 @@ An event-driven automation that scans a GitHub repository for issues labelled `d
 5. Celery Beat repeats the scan every `SCAN_INTERVAL_MINUTES` as a **reconciliation scan**: it re-lists labelled issues and reconciles the store against GitHub's live state, so missed webhook deliveries (or no webhook at all) never drop work.
 6. Each running session is tracked by a `poll_session_task` that re-queues itself every 60 seconds (`apply_async(countdown=60)`) until the session finishes. A session is marked completed when Devin reports `status: exit`, `status: running` with `status_detail: finished`, or when a PR is found but the session is still finishing up; it is marked failed on `error` or `suspended`.
 7. Poll ownership is durable: each chain holds a `poll_token` and a `poll_lease_until` lease on the task row, renewed on every hop. The reconciliation scan re-arms polling for any `running` session whose lease is missing or expired (worker restart, lost broker message, sessions created before Celery), claiming the lease atomically so concurrent scans never start duplicate chains; a poll carrying a superseded token stops itself.
-8. A live dashboard at `http://localhost:8000` shows the status of all tasks.
+8. A live React dashboard at `http://localhost:5173` (`frontend/`, served separately from the API) shows the status of all tasks; the legacy inline dashboard remains at `http://localhost:8000`.
 9. Task state (issue, session, status, PR URL) is persisted in PostgreSQL, so it survives restarts.
 
 ## Quick start
@@ -76,16 +76,58 @@ This starts the following containers (all app containers are built from the same
 | `ingest-worker` | this repo | `celery worker -Q ingest`: `scan_task` (GitHub listing) and `discovery_task` (clone + Semgrep) |
 | `devin-worker` | this repo | `celery worker -Q devin`: `remediate_issue_task` (`devin.create_session`) and `poll_session_task` (status polling) |
 | `beat` | this repo | `celery beat`: reconciliation scan + Semgrep discovery schedule (run exactly one) |
+| `frontend` | `frontend/Dockerfile` | React SPA built with Vite, served by nginx on `:5173`; proxies `/status`, `/status/{n}`, `/healthz` to `api` (same origin, no CORS) |
 | `redis` | `redis:7-alpine` | Celery broker + result backend |
 | `postgres` | `postgres:16-alpine` | Task state, persistent `pgdata` volume |
 
 Scale a tier independently, e.g. `docker compose up --scale devin-worker=3`. `GET /healthz` checks database connectivity and backs the compose/k8s health probes.
 
-The dashboard will be available at **http://localhost:8000**.
+The React dashboard will be available at **http://localhost:5173** (legacy inline dashboard at **http://localhost:8000**).
 At startup, the app enqueues a scan for open issues labelled `devin-remediate` in the target repository.
 Celery Beat enqueues a scan every `SCAN_INTERVAL_MINUTES` to pick up newly labelled issues.
 You can also trigger a manual scan by using the **Scan Issues** button in the dashboard.
 If a Devin session fails, you can retry it by clicking the **Retry Failed** button.
+
+## React SPA (`frontend/`)
+
+Vite + React 19 + TypeScript. It consumes **only** the read-API contract below.
+
+```bash
+cd frontend
+npm ci
+npm run dev          # http://localhost:5173, proxies /status + /healthz to API_PROXY_TARGET (default http://localhost:8000)
+npm run build        # production bundle in frontend/dist/
+npm run lint         # oxlint
+docker build -t remediation-frontend frontend/   # nginx image used by docker-compose (API_UPSTREAM=http://api:8000)
+```
+
+The SPA polls `GET /status` every 5 s (`POLL_MS` in `frontend/src/api/types.ts`) and renders summary counts (running / completed / failed), a per-issue table with issue, Devin session and PR links, status badges and a last-updated label. Requests are same-origin by default (Vite dev proxy / nginx); set `VITE_API_BASE_URL` at build time to target a remote API and `CORS_ALLOW_ORIGINS` on the API for read-only CORS.
+
+### Read-API contract
+
+Frozen in `contracts/read-api.openapi.yaml`, mirrored by `frontend/src/api/types.ts` (`TaskView`), and enforced by `tests/test_read_api_contract.py`.
+
+| Endpoint | Response |
+|---|---|
+| `GET /status` | `TaskView[]` sorted by `issue_number` ascending |
+| `GET /status/{issue_number}` | `TaskView` or `404 {"detail": "not tracked"}` |
+| `GET /healthz` | `{"ok": true}` |
+
+`TaskView` has exactly: `issue_number` (int), `title`, `issue_url`, `session_id` (str\|null), `session_url` (str\|null), `status` (`running`\|`completed`\|`failed`), `pr_url` (str\|null), `created_at`, `updated_at` (ISO-8601). The internal poll-lease columns `poll_token` / `poll_lease_until` are stripped by the read layer and never reach the UI.
+
+### End-to-end tests (`e2e/`)
+
+Playwright (chromium) drives the SPA with `GET /status` mocked via `page.route`, so no API or credentials are needed. Every test records screenshots **and** video.
+
+```bash
+cd e2e
+npm ci
+npx playwright install --with-deps chromium
+npx playwright test      # starts the Vite dev server on :5173 automatically
+npm run report           # open the HTML report
+```
+
+Covers the empty state, a populated table with running/completed/failed rows, issue/session/PR links, and auto-refresh. Artifacts: `e2e/test-results/<test>/` (named `*.png` screenshots + `video.webm`, traces on failure) and `e2e/playwright-report/`. CI (`.github/workflows/tests.yml`, job `e2e`) uploads them as the `playwright-screenshots-videos` and `playwright-report` artifacts on every run.
 
 ## Development with uv
 
@@ -184,7 +226,7 @@ uv run python scripts/webhook.py delete --all-service   # tunnel is ephemeral: a
 
 ## Delivery: stacked PRs and roadmap
 
-This service was built as five stacked PRs, each branched off the previous one (merge bottom-up; when a lower PR changes, rebase the ones above it):
+This service was built as six PRs: phases 1-5 stacked, each branched off the previous one (merge bottom-up; when a lower PR changes, rebase the ones above it):
 
 | # | Branch | Base | Phase |
 |---|---|---|---|
@@ -196,7 +238,9 @@ This service was built as five stacked PRs, each branched off the previous one (
 
 **Temporal upgrade path.** Implement `TemporalOrchestrator(Orchestrator)` in `app/orchestrator/` (`enqueue_scan`, `enqueue_remediation`, `enqueue_discovery`, `schedule_poll` — the last one becomes a durable workflow timer instead of a self-re-queuing task), register it in `get_orchestrator()` under `ORCHESTRATOR=temporal`, and replace the Celery worker deployables with Temporal workers running the same `app/remediation.py` functions as activities. Routes, clients and the store are untouched.
 
-**Follow-up sessions (not in this repo yet):** Phase 6 — SPA replacing `templates/index.html` on top of `app/api/read.py`, plus e2e tests; Phase 7 — hardening and CI (lint/typecheck, image build/publish, deploy); Phase 8 — Devin Security Swarm.
+| 6 | `phase-6-frontend` | `main` | React SPA (`frontend/`), frozen read-API contract, Playwright e2e suite (`e2e/`) — integrated from three parallel lane PRs |
+
+**Follow-up sessions (not in this repo yet):** Phase 7 — hardening and CI (lint/typecheck, image build/publish, deploy); Phase 8 — Devin Security Swarm.
 
 ## Project structure
 
@@ -223,16 +267,19 @@ app/
 ├── store.py        # Persistent task store (same API as the old in-memory store)
 ├── db.py           # SQLAlchemy engine/session + Task model
 └── templates/
-    └── index.html  # Dashboard
+    └── index.html  # Legacy inline dashboard (GET /)
+contracts/read-api.openapi.yaml  # Frozen read-API contract consumed by the SPA
+frontend/           # React SPA (Vite + TS); Dockerfile + nginx.conf for the compose `frontend` service
+e2e/                # Playwright e2e suite (screenshots + video on every run)
 alembic/            # Database migrations
 scripts/webhook.py  # register / list / delete the repo webhook at runtime
 .github/workflows/
-├── tests.yml       # uv sync + pytest
+├── tests.yml       # pytest, frontend lint/build, Playwright e2e (uploads screenshots/videos)
 └── semgrep.yml     # cron/workflow_dispatch Semgrep -> SARIF -> POST /ingest/semgrep
 k8s/                # kustomize manifests: api, ingest-worker, devin-worker, beat, migrate job, redis, postgres
 alembic.ini
 Dockerfile          # one image; compose/k8s pick the command per service
-docker-compose.yml  # migrate, api, ingest-worker, devin-worker, beat, redis, postgres
+docker-compose.yml  # migrate, api, ingest-worker, devin-worker, beat, frontend, redis, postgres
 pyproject.toml
 uv.lock
 .env.example

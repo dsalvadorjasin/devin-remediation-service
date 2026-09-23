@@ -10,6 +10,7 @@ import threading
 import pytest
 from celery.contrib.testing.worker import start_worker
 from fastapi.testclient import TestClient
+from kombu import pools
 
 from app import main, observability, store
 from app.celery_app import celery_app
@@ -38,9 +39,12 @@ def real_broker():
 
 
 def _reset_pool(app) -> None:
-    """Drop cached broker connections so the next call honours the new URL."""
-    if app._pool is not None:
-        app._pool.force_close_all()
+    """Drop cached broker connections so the next call honours the new URL.
+
+    kombu keeps a process-global pool registry keyed by connection URL, so
+    closing the app's pool alone would hand a closed pool to the next test
+    when the integration URL equals the default broker URL (as in CI)."""
+    pools.reset()
     app._after_fork()
 
 

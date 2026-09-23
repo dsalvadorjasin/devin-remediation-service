@@ -58,3 +58,24 @@ description: Run safe end-to-end tests of the remediation dashboard and Celery p
   poll chain has stopped (or purge it with the worker down). Otherwise an old
   countdown can finish the row before startup scans it, making the check inconclusive.
 - Stop processes, remove disposable containers, and verify no listeners remain.
+
+## Read-only React SPA testing
+- For frontend-only changes with approved mocks, use `frontend`: `npm ci` then
+  `npm run dev` (:5173). Vite proxies `/status` and `/healthz` to :8000; set
+  `API_PROXY_TARGET` when using an isolated backend port. This needs no secrets.
+- Use an external temporary HTTP fixture serving TaskView arrays. Include
+  running/completed/failed rows, null session/PR links, and a mode that changes
+  an existing issue's status without reloading the page. Clearly label fixture
+  titles; this validates the SPA, not backend integration or deployed routing.
+- Test HTTP 500 and hanging responses separately: retain last good rows and
+  timestamp while showing an error, then clear the error on a successful poll.
+- Measure request start/finish timestamps. The SPA schedules the next poll
+  5000ms after the previous request settles, not at fixed 5-second intervals.
+  A 7-second response should therefore produce about 12 seconds between starts.
+  Hanging requests time out after 15 seconds; recovering a fixture does not
+  retroactively complete an already hanging request.
+- Computer/browser inspection may rewrite link targets. If `_blank` appears
+  missing despite source markup, verify rendered DOM in a separate clean Chrome
+  profile without computer-tool instrumentation before calling it an app defect.
+  Chrome `--headless --dump-dom --virtual-time-budget=2500` can provide a
+  supplemental runtime DOM check; screenshots remain required for visual claims.

@@ -9,37 +9,35 @@ export interface PolledStatus {
 }
 
 /**
- * Polls GET /status immediately and then every `pollMs`. In-flight requests are
- * aborted on unmount. On failure the last good `rows` are kept and `error` is set.
+ * Polls GET /status immediately, then `pollMs` after each request settles
+ * (requests never overlap). The in-flight request is aborted on unmount.
+ * On failure the last good `rows` are kept and `error` is set.
  */
 export function usePolledStatus(pollMs: number): PolledStatus {
   const [state, setState] = useState<PolledStatus>({ rows: [], lastUpdated: null, error: null })
 
   useEffect(() => {
-    let controller: AbortController | null = null
-    let disposed = false
+    const controller = new AbortController()
+    const { signal } = controller
+    let timer: ReturnType<typeof setTimeout> | undefined
 
     const tick = async () => {
-      controller?.abort()
-      controller = new AbortController()
-      const { signal } = controller
       try {
         const rows = await fetchStatus(signal)
-        if (disposed || signal.aborted) return
+        if (signal.aborted) return
         setState({ rows, lastUpdated: new Date(), error: null })
       } catch (err) {
-        if (disposed || signal.aborted) return
+        if (signal.aborted) return
         const error = err instanceof Error ? err : new Error(String(err))
         setState((prev) => ({ ...prev, error }))
       }
+      timer = setTimeout(() => void tick(), pollMs)
     }
 
     void tick()
-    const id = setInterval(() => void tick(), pollMs)
     return () => {
-      disposed = true
-      clearInterval(id)
-      controller?.abort()
+      clearTimeout(timer)
+      controller.abort()
     }
   }, [pollMs])
 

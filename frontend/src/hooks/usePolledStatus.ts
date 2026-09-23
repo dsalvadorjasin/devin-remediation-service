@@ -8,36 +8,46 @@ export interface PolledStatus {
   error: Error | null
 }
 
+const REQUEST_TIMEOUT_MS = 15_000
+
 /**
  * Polls GET /status immediately, then `pollMs` after each request settles
- * (requests never overlap). The in-flight request is aborted on unmount.
- * On failure the last good `rows` are kept and `error` is set.
+ * (requests never overlap). Each attempt is aborted after REQUEST_TIMEOUT_MS
+ * and on unmount. On failure the last good `rows` are kept and `error` is set.
  */
 export function usePolledStatus(pollMs: number): PolledStatus {
   const [state, setState] = useState<PolledStatus>({ rows: [], lastUpdated: null, error: null })
 
   useEffect(() => {
-    const controller = new AbortController()
-    const { signal } = controller
-    let timer: ReturnType<typeof setTimeout> | undefined
+    let disposed = false
+    let active: AbortController | null = null
+    let nextTimer: ReturnType<typeof setTimeout> | undefined
 
     const tick = async () => {
+      const controller = new AbortController()
+      active = controller
+      const timeout = setTimeout(() => controller.abort(new Error('GET /status timed out')), REQUEST_TIMEOUT_MS)
       try {
-        const rows = await fetchStatus(signal)
-        if (signal.aborted) return
+        const rows = await fetchStatus(controller.signal)
+        if (disposed) return
         setState({ rows, lastUpdated: new Date(), error: null })
       } catch (err) {
-        if (signal.aborted) return
-        const error = err instanceof Error ? err : new Error(String(err))
+        if (disposed) return
+        const reason = controller.signal.aborted ? controller.signal.reason : err
+        const error = reason instanceof Error ? reason : new Error(String(reason))
         setState((prev) => ({ ...prev, error }))
+      } finally {
+        clearTimeout(timeout)
+        active = null
       }
-      timer = setTimeout(() => void tick(), pollMs)
+      nextTimer = setTimeout(() => void tick(), pollMs)
     }
 
     void tick()
     return () => {
-      clearTimeout(timer)
-      controller.abort()
+      disposed = true
+      clearTimeout(nextTimer)
+      active?.abort()
     }
   }, [pollMs])
 

@@ -16,13 +16,45 @@ def test_dashboard_returns_html():
 
 def test_status_returns_store_entries_as_json():
     store.upsert(12, title="Issue 12", issue_url="https://example.com/issues/12")
-    store.upsert(3, title="Issue 3", issue_url="https://example.com/issues/3")
+    store.upsert(
+        3, title="Issue 3", issue_url="https://example.com/issues/3",
+        session_id="sess-3",
+    )
+    assert store.claim_poll(3, "sess-3", lease_seconds=180) is not None
     client = TestClient(main.app)
 
     response = client.get("/status")
 
     assert response.status_code == 200
     assert [entry["issue_number"] for entry in response.json()] == [3, 12]
+    for entry in response.json():
+        assert set(entry) == {
+            "issue_number", "title", "issue_url", "session_id", "session_url",
+            "status", "pr_url", "created_at", "updated_at",
+        }
+        assert "poll_token" not in entry
+        assert "poll_lease_until" not in entry
+
+
+def test_status_for_issue_excludes_poll_lease():
+    store.upsert(
+        42, title="Issue 42", issue_url="https://example.com/issues/42",
+        session_id="sess-42",
+    )
+    assert store.claim_poll(42, "sess-42", lease_seconds=180) is not None
+    client = TestClient(main.app)
+
+    response = client.get("/status/42")
+
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "issue_number", "title", "issue_url", "session_id", "session_url",
+        "status", "pr_url", "created_at", "updated_at",
+    }
+    assert "poll_token" not in response.json()
+    assert "poll_lease_until" not in response.json()
+    assert store.get(42)["poll_token"] is not None
+    assert store.get(42)["poll_lease_until"] is not None
 
 
 def test_manual_scan_enqueues_scan_through_orchestrator(monkeypatch):

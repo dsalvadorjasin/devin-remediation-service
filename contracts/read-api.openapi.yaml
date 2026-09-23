@@ -1,0 +1,88 @@
+openapi: 3.1.0
+info:
+  title: Devin Remediation Service - Read API
+  version: "1.0"
+  description: |
+    Read-only contract consumed by the React SPA (frontend/). Frozen in Phase 6.
+    `poll_token` and `poll_lease_until` are internal to the Celery poll lease
+    and are NOT part of this contract: the API strips them and the SPA never
+    renders them.
+paths:
+  /status:
+    get:
+      operationId: listTasks
+      summary: All tracked tasks, sorted by issue_number ascending
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskView"
+  /status/{issue_number}:
+    get:
+      operationId: getTask
+      parameters:
+        - name: issue_number
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskView"
+        "404":
+          description: Not tracked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [detail]
+                properties:
+                  detail: { type: string }
+  /healthz:
+    get:
+      operationId: healthz
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+components:
+  schemas:
+    TaskStatus:
+      type: string
+      enum: [running, completed, failed]
+    TaskView:
+      type: object
+      additionalProperties: false
+      required:
+        - issue_number
+        - title
+        - issue_url
+        - session_id
+        - session_url
+        - status
+        - pr_url
+        - created_at
+        - updated_at
+      properties:
+        issue_number: { type: integer }
+        title: { type: string }
+        issue_url: { type: string, format: uri }
+        session_id: { type: [string, "null"] }
+        session_url: { type: [string, "null"], format: uri }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        pr_url: { type: [string, "null"], format: uri }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

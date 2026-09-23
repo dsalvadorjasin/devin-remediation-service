@@ -13,6 +13,9 @@ os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "sqlite://")
 # Celery tasks run synchronously in-process; no broker needed.
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "1"
 os.environ["ORCHESTRATOR"] = "celery"
+# Retries still happen in tests, but without waiting between attempts.
+os.environ["HTTP_BACKOFF_BASE_SECONDS"] = "0"
+os.environ["HTTP_BACKOFF_CAP_SECONDS"] = "0"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

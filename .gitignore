@@ -4,3 +4,6 @@ task.md
 __pycache__/
 .pytest_cache/
 remediation.db
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

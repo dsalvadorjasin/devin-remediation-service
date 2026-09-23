@@ -4,6 +4,7 @@
 #   ingest-worker  celery -Q ingest   scan_task, discovery_task (GitHub, Semgrep)
 #   devin-worker   celery -Q devin    remediate_issue_task, poll_session_task
 #   beat           celery beat        reconciliation scan + Semgrep discovery schedule
+#   frontend       React SPA (nginx) + read-API proxy   (:5173)
 #   redis          Celery broker / result backend
 #   postgres       task state
 #
@@ -72,6 +73,17 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    environment:
+      API_UPSTREAM: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine

@@ -16,10 +16,12 @@ Beat (app/celery_app.py).
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -43,6 +45,21 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def configure_cors(api: FastAPI) -> None:
+    origins = [
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    if origins:
+        api.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "HEAD", "OPTIONS"],
+        )
+
+
 app = FastAPI(title="Devin Superset Remediation", lifespan=lifespan)
+configure_cors(app)
 app.include_router(read_router)
 app.include_router(ingest_router)

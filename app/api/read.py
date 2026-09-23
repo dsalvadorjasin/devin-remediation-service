@@ -14,8 +14,23 @@ from app import store
 from app.db import SessionLocal
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+TASK_VIEW_FIELDS = (
+    "issue_number",
+    "title",
+    "issue_url",
+    "session_id",
+    "session_url",
+    "status",
+    "pr_url",
+    "created_at",
+    "updated_at",
+)
 
 router = APIRouter(tags=["read"])
+
+
+def to_task_view(entry: dict) -> dict:
+    return {field: entry[field] for field in TASK_VIEW_FIELDS}
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -25,7 +40,7 @@ async def dashboard():
 
 @router.get("/status")
 async def status():
-    return JSONResponse(content=store.get_all())
+    return JSONResponse(content=[to_task_view(entry) for entry in store.get_all()])
 
 
 @router.get("/status/{issue_number}")
@@ -33,7 +48,7 @@ async def status_for_issue(issue_number: int):
     entry = store.get(issue_number)
     if entry is None:
         return JSONResponse(status_code=404, content={"detail": "not tracked"})
-    return JSONResponse(content=entry)
+    return JSONResponse(content=to_task_view(entry))
 
 
 def _db_ping() -> None:

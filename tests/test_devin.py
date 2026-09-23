@@ -50,7 +50,11 @@ def test_extract_pr_url(session_data, expected):
 
 def test_create_session_posts_prompt_and_returns_json(httpx_mock):
     url = "https://api.devin.ai/v3/organizations/test-org-id/sessions"
-    httpx_mock.add_response(method="POST", url=url, json={"session_id": "sess-1", "url": "https://example.com/sessions/1"})
+    httpx_mock.add_response(
+        method="POST",
+        url=url,
+        json={"session_id": "sess-1", "url": "https://example.com/sessions/1"},
+    )
 
     result = create_session(7, "Fix bug", "Issue body")
 

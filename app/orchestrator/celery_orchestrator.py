@@ -12,9 +12,7 @@ class CeleryOrchestrator(Orchestrator):
     def enqueue_remediation(self, issue: dict, force_retry: bool = False) -> None:
         from app import tasks
 
-        tasks.remediate_issue_task.apply_async(
-            kwargs={"issue": issue, "force_retry": force_retry}
-        )
+        tasks.remediate_issue_task.apply_async(kwargs={"issue": issue, "force_retry": force_retry})
 
     def enqueue_discovery(self, dry_run: bool = False) -> None:
         from app import tasks

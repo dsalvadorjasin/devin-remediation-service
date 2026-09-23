@@ -83,9 +83,7 @@ def test_cors_is_disabled_when_origins_are_unset(monkeypatch):
     main.configure_cors(api)
     api.include_router(main.read_router)
 
-    response = TestClient(api).get(
-        "/status", headers={"Origin": "https://dashboard.example.com"}
-    )
+    response = TestClient(api).get("/status", headers={"Origin": "https://dashboard.example.com"})
 
     assert response.status_code == 200
     assert "access-control-allow-origin" not in response.headers

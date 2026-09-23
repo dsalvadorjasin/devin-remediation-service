@@ -48,6 +48,10 @@ def ingest_findings(
         log.info("Created issue #%s for %s", issue.get("number"), f.title)
         DISCOVERY_ISSUES_CREATED.inc()
         created.append(
-            {"fingerprint": f.fingerprint, "number": issue.get("number"), "html_url": issue.get("html_url")}
+            {
+                "fingerprint": f.fingerprint,
+                "number": issue.get("number"),
+                "html_url": issue.get("html_url"),
+            }
         )
     return {"findings": len(findings), "created": created, "skipped": len(skipped)}

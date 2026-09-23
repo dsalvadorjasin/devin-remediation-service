@@ -17,7 +17,9 @@ def test_dashboard_returns_html():
 def test_status_returns_store_entries_as_json():
     store.upsert(12, title="Issue 12", issue_url="https://example.com/issues/12")
     store.upsert(
-        3, title="Issue 3", issue_url="https://example.com/issues/3",
+        3,
+        title="Issue 3",
+        issue_url="https://example.com/issues/3",
         session_id="sess-3",
     )
     assert store.claim_poll(3, "sess-3", lease_seconds=180) is not None
@@ -29,8 +31,15 @@ def test_status_returns_store_entries_as_json():
     assert [entry["issue_number"] for entry in response.json()] == [3, 12]
     for entry in response.json():
         assert set(entry) == {
-            "issue_number", "title", "issue_url", "session_id", "session_url",
-            "status", "pr_url", "created_at", "updated_at",
+            "issue_number",
+            "title",
+            "issue_url",
+            "session_id",
+            "session_url",
+            "status",
+            "pr_url",
+            "created_at",
+            "updated_at",
         }
         assert "poll_token" not in entry
         assert "poll_lease_until" not in entry
@@ -38,7 +47,9 @@ def test_status_returns_store_entries_as_json():
 
 def test_status_for_issue_excludes_poll_lease():
     store.upsert(
-        42, title="Issue 42", issue_url="https://example.com/issues/42",
+        42,
+        title="Issue 42",
+        issue_url="https://example.com/issues/42",
         session_id="sess-42",
     )
     assert store.claim_poll(42, "sess-42", lease_seconds=180) is not None
@@ -48,8 +59,15 @@ def test_status_for_issue_excludes_poll_lease():
 
     assert response.status_code == 200
     assert set(response.json()) == {
-        "issue_number", "title", "issue_url", "session_id", "session_url",
-        "status", "pr_url", "created_at", "updated_at",
+        "issue_number",
+        "title",
+        "issue_url",
+        "session_id",
+        "session_url",
+        "status",
+        "pr_url",
+        "created_at",
+        "updated_at",
     }
     assert "poll_token" not in response.json()
     assert "poll_lease_until" not in response.json()
@@ -84,7 +102,9 @@ def test_scan_and_process_enqueues_each_issue(monkeypatch):
     monkeypatch.setattr(github, "get_labeled_issues", lambda: issues)
     processed = []
     monkeypatch.setattr(
-        remediation, "process_issue", lambda issue, force_retry=False: processed.append(issue["number"])
+        remediation,
+        "process_issue",
+        lambda issue, force_retry=False: processed.append(issue["number"]),
     )
 
     result = remediation.scan_and_process()
@@ -183,9 +203,7 @@ def test_process_issue_marks_existing_pr_completed_and_skips_session(monkeypatch
         "body": "Details",
         "html_url": "https://example.com/issues/2",
     }
-    monkeypatch.setattr(
-        github, "find_existing_pr", lambda number: "https://example.com/pr/2"
-    )
+    monkeypatch.setattr(github, "find_existing_pr", lambda number: "https://example.com/pr/2")
 
     create_session_calls = []
     monkeypatch.setattr(
@@ -260,7 +278,11 @@ def test_process_issue_retries_failed_when_force_retry_true(monkeypatch):
     }
     store.upsert(5, title="Fix bug", issue_url="https://example.com/issues/5", status="failed")
     monkeypatch.setattr(github, "find_existing_pr", lambda number: None)
-    monkeypatch.setattr(devin, "create_session", lambda *args: {"session_id": "sess-5", "url": "https://example.com/sessions/5"})
+    monkeypatch.setattr(
+        devin,
+        "create_session",
+        lambda *args: {"session_id": "sess-5", "url": "https://example.com/sessions/5"},
+    )
     monkeypatch.setattr(github, "post_comment", lambda *args, **kwargs: None)
 
     main.process_issue(issue, force_retry=True)
@@ -406,7 +428,9 @@ def test_poll_session_releases_lease_on_completion(monkeypatch, scheduled_polls)
         "get_session",
         lambda session_id: {"status": "finished", "status_detail": None, "pull_requests": []},
     )
-    monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: "https://example.com/pr/17")
+    monkeypatch.setattr(
+        github, "find_existing_pr", lambda issue_number: "https://example.com/pr/17"
+    )
 
     tasks.poll_session_task.apply(
         kwargs={"issue_number": 17, "session_id": "sess-17", "poll_token": token}
@@ -419,27 +443,49 @@ def test_poll_session_releases_lease_on_completion(monkeypatch, scheduled_polls)
 
 
 def test_poll_session_marks_failed_on_error(monkeypatch, scheduled_polls):
-    store.upsert(13, title="Fix bug", issue_url="https://example.com/issues/13", session_id="sess-13", status="running")
+    store.upsert(
+        13,
+        title="Fix bug",
+        issue_url="https://example.com/issues/13",
+        session_id="sess-13",
+        status="running",
+    )
     monkeypatch.setattr(
         devin, "get_session", lambda session_id: {"status": "error", "pull_requests": []}
     )
     monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
-    assert tasks.poll_session_task.apply(
-        kwargs={"issue_number": 13, "session_id": "sess-13", "poll_token": _own(13, "sess-13")}
-    ).get() is False
+    assert (
+        tasks.poll_session_task.apply(
+            kwargs={"issue_number": 13, "session_id": "sess-13", "poll_token": _own(13, "sess-13")}
+        ).get()
+        is False
+    )
     assert store.get_status(13) == "failed"
     assert scheduled_polls == []
 
 
 def test_poll_session_stops_when_superseded(monkeypatch, scheduled_polls):
-    store.upsert(14, title="Fix bug", issue_url="https://example.com/issues/14", session_id="sess-new", status="running")
+    store.upsert(
+        14,
+        title="Fix bug",
+        issue_url="https://example.com/issues/14",
+        session_id="sess-new",
+        status="running",
+    )
     called = []
     monkeypatch.setattr(devin, "get_session", lambda session_id: called.append(session_id))
 
-    assert tasks.poll_session_task.apply(
-        kwargs={"issue_number": 14, "session_id": "sess-old", "poll_token": _own(14, "sess-new")}
-    ).get() is False
+    assert (
+        tasks.poll_session_task.apply(
+            kwargs={
+                "issue_number": 14,
+                "session_id": "sess-old",
+                "poll_token": _own(14, "sess-new"),
+            }
+        ).get()
+        is False
+    )
     assert called == []
 
 
@@ -449,7 +495,9 @@ def test_terminal_poll_release_leaves_newer_owner(monkeypatch, scheduled_polls):
     old = _own(18, "sess-18")
     new = store.claim_poll(18, "sess-18", lease_seconds=180, only_if_lost=False)
     assert new is not None and new != old
-    monkeypatch.setattr(devin, "get_session", lambda session_id: {"status": "exit", "pull_requests": []})
+    monkeypatch.setattr(
+        devin, "get_session", lambda session_id: {"status": "exit", "pull_requests": []}
+    )
     monkeypatch.setattr(github, "find_existing_pr", lambda issue_number: None)
 
     assert remediation.poll_session_once(18, "sess-18", old) is False

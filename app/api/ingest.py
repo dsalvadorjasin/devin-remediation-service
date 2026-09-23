@@ -63,7 +63,7 @@ async def github_webhook(
     try:
         payload = json.loads(body or b"{}")
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="invalid JSON")
+        raise HTTPException(status_code=400, detail="invalid JSON") from None
     result = await run_in_threadpool(webhooks.handle_event, x_github_event, payload)
     log.info("Webhook %s delivery=%s -> %s", x_github_event, x_github_delivery, result)
     return JSONResponse(content={"ok": True, "delivery": x_github_delivery, **result})

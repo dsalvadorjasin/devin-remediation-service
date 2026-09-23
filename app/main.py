@@ -62,7 +62,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 async def request_id_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    request_id = request.headers.get(observability.REQUEST_ID_HEADER) or observability.new_request_id()
+    request_id = (
+        request.headers.get(observability.REQUEST_ID_HEADER) or observability.new_request_id()
+    )
     token = observability.set_request_id(request_id)
     try:
         with observability.span(

@@ -12,7 +12,6 @@ Provides three operations used by main.py to drive the automation loop:
 
 import os
 
-
 from app import http_client
 
 GITHUB_API = "https://api.github.com"
@@ -66,7 +65,9 @@ def find_existing_pr(issue_number: int) -> str | None:
     # --- check 1: timeline cross-references ---
     timeline_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_number}/timeline"
     with http_client.client() as client:
-        resp = http_client.request(client, "GET", timeline_url, headers=_headers(), params={"per_page": 100})
+        resp = http_client.request(
+            client, "GET", timeline_url, headers=_headers(), params={"per_page": 100}
+        )
     for event in resp.json():
         if event.get("event") != "cross-referenced":
             continue
@@ -78,8 +79,8 @@ def find_existing_pr(issue_number: int) -> str | None:
     prs_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls"
     needle = f"#{issue_number}"
     with http_client.client() as client:
-        resp = http_client.request(client, "GET", 
-            prs_url, headers=_headers(), params={"state": "open", "per_page": 100}
+        resp = http_client.request(
+            client, "GET", prs_url, headers=_headers(), params={"state": "open", "per_page": 100}
         )
     for pr in resp.json():
         title = pr.get("title", "")
@@ -94,7 +95,7 @@ def post_comment(issue_number: int, body: str) -> None:
     """Post a comment on a GitHub issue."""
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/comments"
     with http_client.client() as client:
-        resp = http_client.request(client, "POST", url, headers=_headers(), json={"body": body})
+        http_client.request(client, "POST", url, headers=_headers(), json={"body": body})
 
 
 def get_issue(issue_number: int) -> dict:
@@ -107,7 +108,7 @@ def get_issue(issue_number: int) -> dict:
 def add_labels(issue_number: int, labels: list[str]) -> None:
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/labels"
     with http_client.client() as client:
-        resp = http_client.request(client, "POST", url, headers=_headers(), json={"labels": labels})
+        http_client.request(client, "POST", url, headers=_headers(), json={"labels": labels})
 
 
 def create_issue(title: str, body: str, labels: list[str] | None = None) -> dict:
@@ -119,7 +120,9 @@ def create_issue(title: str, body: str, labels: list[str] | None = None) -> dict
     return resp.json()
 
 
-def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-fingerprint") -> dict[str, dict]:
+def find_issues_by_fingerprint(
+    fingerprints: list[str], marker: str = "semgrep-fingerprint"
+) -> dict[str, dict]:
     """Map fingerprint -> issue (open or closed) whose body contains
     `<!-- {marker}: {fingerprint} -->`. Closed issues count: a finding that
     was triaged/closed must not be re-filed every run. One paginated listing
@@ -132,7 +135,9 @@ def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-f
     page = 1
     with http_client.client() as client:
         while True:
-            resp = http_client.request(client, "GET", 
+            resp = http_client.request(
+                client,
+                "GET",
                 url,
                 headers=_headers(),
                 params={"labels": LABEL, "state": "all", "per_page": 100, "page": page},
@@ -185,4 +190,4 @@ def create_webhook(payload_url: str, secret: str, events: list[str] | None = Non
 def delete_webhook(hook_id: int) -> None:
     url = f"{GITHUB_API}/repos/{_repo()}/hooks/{hook_id}"
     with http_client.client() as client:
-        resp = http_client.request(client, "DELETE", url, headers=_headers())
+        http_client.request(client, "DELETE", url, headers=_headers())

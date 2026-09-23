@@ -35,9 +35,7 @@ from prometheus_client import Counter
 from app import db
 
 REQUEST_ID_HEADER = "X-Request-ID"
-_request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "request_id", default=None
-)
+_request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
 _configured = False
 
 
@@ -101,9 +99,7 @@ def configure_logging() -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s"
-            )
+            logging.Formatter("%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s")
         )
     root = logging.getLogger()
     root.handlers[:] = [handler]
@@ -140,9 +136,7 @@ CLAIM_CONFLICTS = Counter(
     "remediation_claim_conflicts_total",
     "process_issue calls that lost the atomic claim to another task.",
 )
-EXTERNAL_RETRIES = Counter(
-    "external_http_retries_total", "Retried outbound HTTP calls.", ["host"]
-)
+EXTERNAL_RETRIES = Counter("external_http_retries_total", "Retried outbound HTTP calls.", ["host"])
 
 
 # --------------------------------------------------------------------------- #
@@ -163,9 +157,7 @@ def configure_tracing(service_name: str) -> None:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     provider = TracerProvider(
-        resource=Resource.create(
-            {SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", service_name)}
-        )
+        resource=Resource.create({SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", service_name)})
     )
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)

@@ -80,7 +80,9 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     return max(0.0, when.timestamp() - time.time())
 
 
-def backoff_seconds(attempt: int, base: float, cap: float, rand: Callable[[], float] = random.random) -> float:
+def backoff_seconds(
+    attempt: int, base: float, cap: float, rand: Callable[[], float] = random.random
+) -> float:
     """Full-jitter exponential backoff: uniform(0, min(cap, base * 2**attempt))."""
     return rand() * min(cap, base * (2**attempt))
 
@@ -123,7 +125,12 @@ def request(
             delay = backoff_seconds(attempt, base, cap)
             log.warning(
                 "%s %s failed (%s); retry %d/%d in %.2fs",
-                method, url, type(exc).__name__, attempt + 1, attempts - 1, delay,
+                method,
+                url,
+                type(exc).__name__,
+                attempt + 1,
+                attempts - 1,
+                delay,
             )
             sleep(delay)
             continue
@@ -134,13 +141,18 @@ def request(
             response.raise_for_status()
             return response
         EXTERNAL_RETRIES.labels(host=host).inc()
-        delay = retry_after_seconds(response)
-        if delay is None:
-            delay = backoff_seconds(attempt, base, cap)
-        delay = min(delay, cap)
+        retry_after = retry_after_seconds(response)
+        delay = min(
+            retry_after if retry_after is not None else backoff_seconds(attempt, base, cap), cap
+        )
         log.warning(
             "%s %s returned %d; retry %d/%d in %.2fs",
-            method, url, response.status_code, attempt + 1, attempts - 1, delay,
+            method,
+            url,
+            response.status_code,
+            attempt + 1,
+            attempts - 1,
+            delay,
         )
         sleep(delay)
     raise AssertionError("unreachable")

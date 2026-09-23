@@ -75,7 +75,11 @@ def test_find_existing_pr_ignores_closed_cross_referenced_and_falls_back_to_open
         url=pulls_url,
         json=[
             {"title": "Fix #42: important bug", "html_url": "https://example.com/pr/42"},
-            {"title": "Unrelated", "body": "No match here", "html_url": "https://example.com/pr/99"},
+            {
+                "title": "Unrelated",
+                "body": "No match here",
+                "html_url": "https://example.com/pr/99",
+            },
         ],
     )
 
@@ -93,7 +97,11 @@ def test_find_existing_pr_returns_none_when_no_match(httpx_mock):
         method="GET",
         url=pulls_url,
         json=[
-            {"title": "Unrelated", "body": "No issue reference", "html_url": "https://example.com/pr/1"}
+            {
+                "title": "Unrelated",
+                "body": "No issue reference",
+                "html_url": "https://example.com/pr/1",
+            }
         ],
     )
 

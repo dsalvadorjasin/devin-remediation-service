@@ -39,7 +39,9 @@ def test_devin_tasks_routed_to_devin_queue():
 
 def test_compose_and_k8s_define_all_services():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-    assert {"api", "ingest-worker", "devin-worker", "beat", "redis", "postgres", "migrate"} <= set(compose["services"])
+    assert {"api", "ingest-worker", "devin-worker", "beat", "redis", "postgres", "migrate"} <= set(
+        compose["services"]
+    )
     assert "-Q devin" in compose["services"]["devin-worker"]["command"]
     assert "-Q ingest" in compose["services"]["ingest-worker"]["command"]
 

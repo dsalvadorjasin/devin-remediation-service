@@ -102,7 +102,9 @@ def test_domain_counters_track_session_lifecycle(monkeypatch):
 
     token = store.claim_poll(7, "s-1", lease_seconds=60)
     monkeypatch.setattr(
-        remediation.devin, "get_session", lambda sid: {"status": "exit", "pull_requests": [{"pr_url": "https://gh/pull/1"}]}
+        remediation.devin,
+        "get_session",
+        lambda sid: {"status": "exit", "pull_requests": [{"pr_url": "https://gh/pull/1"}]},
     )
     completed_before = _counter("remediation_outcomes_total", status="completed")
     assert remediation.poll_session_once(7, "s-1", token) is False

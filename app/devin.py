@@ -61,7 +61,6 @@ def create_session(issue_number: int, title: str, body: str) -> dict:
         resp = http_client.request(
             client,
             "POST",
-            
             f"{DEVIN_API}/organizations/{_org_id()}/sessions",
             headers=_headers(),
             json=payload,
@@ -78,7 +77,6 @@ def get_session(session_id: str) -> dict:
         resp = http_client.request(
             client,
             "GET",
-            
             f"{DEVIN_API}/organizations/{_org_id()}/sessions/{session_id}",
             headers=_headers(),
         )

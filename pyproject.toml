@@ -25,7 +25,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "celery-types>=0.26.0",
     "fakeredis>=2.23,<3",
     "mypy>=1.10,<2",
     "pytest==8.2.2",
@@ -45,3 +44,29 @@ packages = ["app"]
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["frontend", "e2e", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",  # line length: enforced by the formatter's judgement, not lint
+    "B008",  # FastAPI Depends()/Query() in defaults
+    "SIM105",  # contextlib.suppress is less readable than try/except/pass here
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "B017", "SIM117"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = ["frontend/", "e2e/", "alembic/"]

@@ -41,7 +41,9 @@ def test_enqueue_remediation_runs_process_issue(monkeypatch):
     issue = {"number": 9, "title": "T", "body": "", "html_url": "u"}
     seen = []
     monkeypatch.setattr(
-        remediation, "process_issue", lambda i, force_retry=False: seen.append((i["number"], force_retry))
+        remediation,
+        "process_issue",
+        lambda i, force_retry=False: seen.append((i["number"], force_retry)),
     )
 
     CeleryOrchestrator().enqueue_remediation(issue)

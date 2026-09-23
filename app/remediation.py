@@ -55,9 +55,7 @@ def arm_poll(
     return _publish_poll(issue_number, session_id, delay_seconds, token)
 
 
-def continue_poll(
-    issue_number: int, session_id: str, poll_token: str, delay_seconds: int
-) -> None:
+def continue_poll(issue_number: int, session_id: str, poll_token: str, delay_seconds: int) -> None:
     """Renew the lease held by an existing chain and schedule its next poll."""
     if not store.renew_poll(issue_number, poll_token, _lease_seconds(delay_seconds)):
         return
@@ -107,9 +105,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     pr_url = github.find_existing_pr(number)
     if pr_url:
         log.info("Issue #%d already has open PR %s — marking completed", number, pr_url)
-        store.upsert(
-            number, title=title, issue_url=issue_url, status="completed", pr_url=pr_url
-        )
+        store.upsert(number, title=title, issue_url=issue_url, status="completed", pr_url=pr_url)
         return False
 
     # 2. Currently running → never spawn a duplicate. Enforced by the atomic
@@ -133,9 +129,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
         SESSIONS_CREATED.inc()
         session_id = result.get("session_id") or result.get("id")
         session_url = result.get("url") or result.get("session_url")
-        store.upsert(
-            number, session_id=session_id, session_url=session_url, status="running"
-        )
+        store.upsert(number, session_id=session_id, session_url=session_url, status="running")
         log.info("Session %s created for issue #%d", session_id, number)
         try:
             github.post_comment(
@@ -176,9 +170,7 @@ def scan_and_process(force_retry: bool = False) -> dict:
 
     rearmed = 0
     for entry in store.get_unpolled_running():
-        if arm_poll(
-            entry["issue_number"], entry["session_id"], delay_seconds=0, only_if_lost=True
-        ):
+        if arm_poll(entry["issue_number"], entry["session_id"], delay_seconds=0, only_if_lost=True):
             rearmed += 1
             log.info(
                 "Re-armed lost poll for issue #%d (session %s)",

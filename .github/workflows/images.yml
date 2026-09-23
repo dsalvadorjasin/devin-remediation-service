@@ -1,0 +1,79 @@
+# Build and publish the service + frontend images to GHCR on every push to
+# main, tagged by commit SHA (plus a moving `main` tag). Uses the workflow's
+# own GITHUB_TOKEN — no extra secrets are required.
+#
+# Deploy is opt-in: the `deploy` job only runs when the repository variable
+# DEPLOY_ENABLED is "true" and the `production` environment provides a
+# base64 kubeconfig in DEPLOY_KUBECONFIG. Otherwise it is skipped and the
+# workflow stays green. See README "Image publishing & deployment".
+name: images
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: service
+            context: .
+          - name: frontend
+            context: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=ref,event=branch
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "${{ secrets.DEPLOY_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Roll out ${{ github.sha }}
+        run: |
+          IMAGE="${IMAGE_PREFIX}/service:${GITHUB_SHA}"
+          NS=devin-remediation
+          kubectl -n "$NS" set image deployment/remediation-api wait-for-migrations="$IMAGE" api="$IMAGE"
+          kubectl -n "$NS" set image deployment/remediation-ingest-worker wait-for-migrations="$IMAGE" worker="$IMAGE"
+          kubectl -n "$NS" set image deployment/remediation-devin-worker wait-for-migrations="$IMAGE" worker="$IMAGE"
+          kubectl -n "$NS" set image deployment/remediation-beat wait-for-migrations="$IMAGE" beat="$IMAGE"
+          kubectl -n "$NS" rollout status deployment/remediation-api --timeout=180s

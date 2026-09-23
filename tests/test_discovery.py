@@ -5,7 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import github, main
-from app.discovery import FINGERPRINT_MARKER, Finding, SemgrepDiscoverySource, ingest_findings, parse_sarif
+from app.discovery import (
+    FINGERPRINT_MARKER,
+    Finding,
+    SemgrepDiscoverySource,
+    ingest_findings,
+    parse_sarif,
+)
 from app.orchestrator.celery_orchestrator import CeleryOrchestrator
 
 FIXTURE = Path(__file__).parent / "fixtures" / "semgrep.sarif"
@@ -26,8 +32,16 @@ def ingest_token(monkeypatch):
 @pytest.fixture
 def orchestrator_calls(monkeypatch):
     calls = []
-    monkeypatch.setattr(CeleryOrchestrator, "enqueue_scan", lambda self, force_retry=False: calls.append(("scan", force_retry)))
-    monkeypatch.setattr(CeleryOrchestrator, "enqueue_discovery", lambda self, dry_run=False: calls.append(("discovery", dry_run)))
+    monkeypatch.setattr(
+        CeleryOrchestrator,
+        "enqueue_scan",
+        lambda self, force_retry=False: calls.append(("scan", force_retry)),
+    )
+    monkeypatch.setattr(
+        CeleryOrchestrator,
+        "enqueue_discovery",
+        lambda self, dry_run=False: calls.append(("discovery", dry_run)),
+    )
     return calls
 
 
@@ -55,7 +69,14 @@ def test_parse_sarif_normalizes_findings(sarif):
 
 
 def test_finding_title_and_body_contain_marker():
-    f = Finding(rule_id="r.x", message="msg", severity="LOW", file_path="a/b.py", start_line=3, snippet="x = 1")
+    f = Finding(
+        rule_id="r.x",
+        message="msg",
+        severity="LOW",
+        file_path="a/b.py",
+        start_line=3,
+        snippet="x = 1",
+    )
     assert f.title == "[semgrep] r.x: a/b.py:3"
     body = f.issue_body()
     assert f"<!-- {FINGERPRINT_MARKER}: {f.fingerprint} -->" in body
@@ -63,10 +84,28 @@ def test_finding_title_and_body_contain_marker():
 
 
 def test_fingerprint_stable_under_small_line_shift_and_whitespace():
-    a = Finding(rule_id="r", message="m", severity="S", file_path="f.py", start_line=41, snippet="foo( x )")
-    b = Finding(rule_id="r", message="different message", severity="S", file_path="f.py", start_line=43, snippet="foo(  x )")
-    c = Finding(rule_id="r", message="m", severity="S", file_path="f.py", start_line=141, snippet="foo(x)")
-    d = Finding(rule_id="other", message="m", severity="S", file_path="f.py", start_line=41, snippet="foo(x)")
+    a = Finding(
+        rule_id="r", message="m", severity="S", file_path="f.py", start_line=41, snippet="foo( x )"
+    )
+    b = Finding(
+        rule_id="r",
+        message="different message",
+        severity="S",
+        file_path="f.py",
+        start_line=43,
+        snippet="foo(  x )",
+    )
+    c = Finding(
+        rule_id="r", message="m", severity="S", file_path="f.py", start_line=141, snippet="foo(x)"
+    )
+    d = Finding(
+        rule_id="other",
+        message="m",
+        severity="S",
+        file_path="f.py",
+        start_line=41,
+        snippet="foo(x)",
+    )
     assert a.fingerprint == b.fingerprint
     assert a.fingerprint != c.fingerprint
     assert a.fingerprint != d.fingerprint
@@ -76,7 +115,9 @@ def test_discover_strips_checkout_prefix(monkeypatch, sarif, tmp_path):
     src = SemgrepDiscoverySource(repo="o/r", checkout_dir=str(tmp_path), token="")
     monkeypatch.setattr(src, "update_checkout", lambda: tmp_path)
     for res in sarif["runs"][0]["results"]:
-        res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = f"{tmp_path}/" + res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = (
+            f"{tmp_path}/" + res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        )
     monkeypatch.setattr(src, "run_semgrep", lambda target: sarif)
     findings = src.discover()
     assert len(findings) == 2
@@ -87,7 +128,9 @@ def test_discover_strips_checkout_prefix(monkeypatch, sarif, tmp_path):
 
 
 def test_create_issue_posts_with_label(httpx_mock):
-    httpx_mock.add_response(method="POST", url=ISSUES_URL, json={"number": 5, "html_url": "https://gh/o/r/issues/5"})
+    httpx_mock.add_response(
+        method="POST", url=ISSUES_URL, json={"number": 5, "html_url": "https://gh/o/r/issues/5"}
+    )
     issue = github.create_issue("t", "b")
     assert issue["number"] == 5
     sent = json.loads(httpx_mock.get_requests()[0].content)
@@ -111,7 +154,9 @@ def test_find_issues_by_fingerprint(httpx_mock):
 
 def test_ingest_findings_dedups_existing_and_duplicates(monkeypatch, sarif):
     findings = parse_sarif(sarif) + parse_sarif(sarif)  # same two findings twice
-    monkeypatch.setattr(github, "find_issues_by_fingerprint", lambda fps: {findings[0].fingerprint: {"number": 1}})
+    monkeypatch.setattr(
+        github, "find_issues_by_fingerprint", lambda fps: {findings[0].fingerprint: {"number": 1}}
+    )
     created = []
 
     def fake_create(title, body, labels=None):
@@ -130,9 +175,15 @@ def test_ingest_findings_cap_applies_after_dedup(monkeypatch, sarif):
     """SEMGREP_MAX_FINDINGS caps *new* issues per run; already-filed findings
     must not eat the budget, otherwise later findings are never reached."""
     findings = parse_sarif(sarif)
-    monkeypatch.setattr(github, "find_issues_by_fingerprint", lambda fps: {findings[0].fingerprint: {"number": 1}})
+    monkeypatch.setattr(
+        github, "find_issues_by_fingerprint", lambda fps: {findings[0].fingerprint: {"number": 1}}
+    )
     created = []
-    monkeypatch.setattr(github, "create_issue", lambda t, b, labels=None: created.append(t) or {"number": 1, "html_url": "u"})
+    monkeypatch.setattr(
+        github,
+        "create_issue",
+        lambda t, b, labels=None: created.append(t) or {"number": 1, "html_url": "u"},
+    )
     monkeypatch.setenv("SEMGREP_MAX_FINDINGS", "1")
     result = ingest_findings(findings)
     assert created == [findings[1].title]
@@ -165,10 +216,16 @@ def test_ingest_endpoint_rejects_oversized_body(ingest_token, monkeypatch):
 
     monkeypatch.setattr(ingest_api, "MAX_SARIF_BYTES", 10)
     client = TestClient(main.app)
-    resp = client.post("/ingest/semgrep", content=b"{" + b" " * 20 + b"}", headers={"Authorization": f"Bearer {TOKEN}"})
+    resp = client.post(
+        "/ingest/semgrep",
+        content=b"{" + b" " * 20 + b"}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
     assert resp.status_code == 413
     resp = client.post(
-        "/ingest/semgrep", content=b"{}", headers={"Authorization": f"Bearer {TOKEN}", "Content-Length": "2"}
+        "/ingest/semgrep",
+        content=b"{}",
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Length": "2"},
     )
     assert resp.status_code != 413
 
@@ -179,7 +236,12 @@ def test_ingest_endpoint_rejects_oversized_body(ingest_token, monkeypatch):
 def test_ingest_endpoint_requires_token(ingest_token):
     client = TestClient(main.app)
     assert client.post("/ingest/semgrep", content=b"{}").status_code == 401
-    assert client.post("/ingest/semgrep", content=b"{}", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert (
+        client.post(
+            "/ingest/semgrep", content=b"{}", headers={"Authorization": "Bearer nope"}
+        ).status_code
+        == 401
+    )
 
 
 def test_ingest_endpoint_503_without_token_configured(monkeypatch):
@@ -188,8 +250,14 @@ def test_ingest_endpoint_503_without_token_configured(monkeypatch):
     assert client.post("/ingest/semgrep", content=b"{}").status_code == 503
 
 
-def test_ingest_endpoint_accepts_sarif_and_creates_issues(ingest_token, orchestrator_calls, httpx_mock, sarif):
-    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1", json=[])
+def test_ingest_endpoint_accepts_sarif_and_creates_issues(
+    ingest_token, orchestrator_calls, httpx_mock, sarif
+):
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1",
+        json=[],
+    )
     httpx_mock.add_response(method="POST", url=ISSUES_URL, json={"number": 11, "html_url": "u11"})
     httpx_mock.add_response(method="POST", url=ISSUES_URL, json={"number": 12, "html_url": "u12"})
     client = TestClient(main.app)
@@ -201,16 +269,26 @@ def test_ingest_endpoint_accepts_sarif_and_creates_issues(ingest_token, orchestr
     assert data["findings"] == 2 and data["skipped"] == 0
     assert [c["number"] for c in data["created"]] == [11, 12]
     posted = [json.loads(r.content) for r in httpx_mock.get_requests() if r.method == "POST"]
-    assert posted[0]["title"].startswith("[semgrep] python.lang.security.audit.dangerous-subprocess-use")
+    assert posted[0]["title"].startswith(
+        "[semgrep] python.lang.security.audit.dangerous-subprocess-use"
+    )
     assert posted[0]["labels"] == [github.LABEL]
     assert FINGERPRINT_MARKER in posted[0]["body"]
     assert orchestrator_calls == [("scan", False)]
 
 
-def test_ingest_endpoint_dry_run_creates_nothing(ingest_token, orchestrator_calls, httpx_mock, sarif):
-    httpx_mock.add_response(method="GET", url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1", json=[])
+def test_ingest_endpoint_dry_run_creates_nothing(
+    ingest_token, orchestrator_calls, httpx_mock, sarif
+):
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{ISSUES_URL}?labels={github.LABEL}&state=all&per_page=100&page=1",
+        json=[],
+    )
     client = TestClient(main.app)
-    resp = client.post("/ingest/semgrep?dry_run=true", json=sarif, headers={"X-Ingest-Token": TOKEN})
+    resp = client.post(
+        "/ingest/semgrep?dry_run=true", json=sarif, headers={"X-Ingest-Token": TOKEN}
+    )
     assert resp.status_code == 200
     assert len(resp.json()["created"]) == 2
     assert all(r.method == "GET" for r in httpx_mock.get_requests())
@@ -227,7 +305,9 @@ def test_ingest_endpoint_empty_body_enqueues_discovery(ingest_token, orchestrato
 
 def test_ingest_endpoint_rejects_non_json(ingest_token):
     client = TestClient(main.app)
-    resp = client.post("/ingest/semgrep", content=b"not json", headers={"Authorization": f"Bearer {TOKEN}"})
+    resp = client.post(
+        "/ingest/semgrep", content=b"not json", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
     assert resp.status_code == 400
 
 
@@ -237,15 +317,29 @@ def test_discovery_task_enqueues_scan_when_issues_created(monkeypatch):
 
     monkeypatch.setattr(semgrep_mod.SemgrepDiscoverySource, "__init__", lambda self, *a, **k: None)
     monkeypatch.setattr(semgrep_mod.SemgrepDiscoverySource, "discover", lambda self: [])
-    monkeypatch.setattr("app.discovery.ingest_findings", lambda findings, dry_run=False: {"created": [{"number": 1}], "skipped": []})
+    monkeypatch.setattr(
+        "app.discovery.ingest_findings",
+        lambda findings, dry_run=False: {"created": [{"number": 1}], "skipped": []},
+    )
     calls = []
-    monkeypatch.setattr(CeleryOrchestrator, "enqueue_scan", lambda self, force_retry=False: calls.append(force_retry))
+    monkeypatch.setattr(
+        CeleryOrchestrator,
+        "enqueue_scan",
+        lambda self, force_retry=False: calls.append(force_retry),
+    )
     assert tasks.discovery_task()["created"]
     assert calls == [False]
 
 
 def test_scan_env_drops_service_credentials(monkeypatch):
-    for k in ("GITHUB_TOKEN", "DEVIN_API_KEY", "DATABASE_URL", "CELERY_BROKER_URL", "INGEST_TOKEN", "GITHUB_WEBHOOK_SECRET"):
+    for k in (
+        "GITHUB_TOKEN",
+        "DEVIN_API_KEY",
+        "DATABASE_URL",
+        "CELERY_BROKER_URL",
+        "INGEST_TOKEN",
+        "GITHUB_WEBHOOK_SECRET",
+    ):
         monkeypatch.setenv(k, "secret")
     monkeypatch.setenv("SEMGREP_CONFIG", "p/ci")
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -254,7 +348,19 @@ def test_scan_env_drops_service_credentials(monkeypatch):
 
     assert env["SEMGREP_CONFIG"] == "p/ci"
     assert env["PATH"] == "/usr/bin"
-    assert not {k for k in env if k in ("GITHUB_TOKEN", "DEVIN_API_KEY", "DATABASE_URL", "CELERY_BROKER_URL", "INGEST_TOKEN", "GITHUB_WEBHOOK_SECRET")}
+    assert not {
+        k
+        for k in env
+        if k
+        in (
+            "GITHUB_TOKEN",
+            "DEVIN_API_KEY",
+            "DATABASE_URL",
+            "CELERY_BROKER_URL",
+            "INGEST_TOKEN",
+            "GITHUB_WEBHOOK_SECRET",
+        )
+    }
 
 
 def test_scan_env_keeps_proxy_and_ca_settings(monkeypatch):

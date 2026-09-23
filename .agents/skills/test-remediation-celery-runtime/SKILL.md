@@ -72,8 +72,9 @@ description: Run safe end-to-end tests of the remediation dashboard and Celery p
     reloading the page. Label fixture titles clearly; this validates the SPA,
     not backend integration or deployed routing.
   - **Real API (read-only):** run only isolated PostgreSQL, Redis, migrations,
-    and API. Keep workers and Beat stopped: API startup enqueues a scan but will
-    not execute external work without workers. That queued `scan_task` stays in
+    and API. Explicitly set `CELERY_TASK_ALWAYS_EAGER=0` (eager mode would run the
+    startup scan inside the API process), then keep workers and Beat stopped: API
+    startup enqueues a scan but will not execute external work without workers. That queued `scan_task` stays in
     the broker: use a disposable Redis (or purge the isolated broker DB) before
     ever starting a worker against it. Use the same DATABASE_URL and
     GITHUB_REPO for API and store seed commands. `store.upsert` inserts realistic

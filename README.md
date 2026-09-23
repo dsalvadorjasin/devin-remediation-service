@@ -112,6 +112,8 @@ Frozen in `contracts/read-api.openapi.yaml`, mirrored by `frontend/src/api/types
 | `GET /status` | `TaskView[]` sorted by `issue_number` ascending |
 | `GET /status/{issue_number}` | `TaskView` or `404 {"detail": "not tracked"}` |
 | `GET /healthz` | `{"ok": true}` |
+| `GET /readyz` | `{"ready": true, "checks": {"database": "ok", "broker": "ok"}}` (503 when either check fails) |
+| `GET /metrics` | Prometheus text exposition |
 
 `TaskView` has exactly: `issue_number` (int), `title`, `issue_url`, `session_id` (str\|null), `session_url` (str\|null), `status` (`running`\|`completed`\|`failed`), `pr_url` (str\|null), `created_at`, `updated_at` (ISO-8601). The internal poll-lease columns `poll_token` / `poll_lease_until` are stripped by the read layer and never reach the UI.
 
@@ -240,7 +242,51 @@ This service was built as six PRs: phases 1-5 stacked, each branched off the pre
 
 | 6 | `phase-6-frontend` | `main` | React SPA (`frontend/`), frozen read-API contract, Playwright e2e suite (`e2e/`) — integrated from three parallel lane PRs |
 
-**Follow-up sessions (not in this repo yet):** Phase 7 — hardening and CI (lint/typecheck, image build/publish, deploy); Phase 8 — Devin Security Swarm.
+| 7 | `phase-7-hardening` | `main` | Production hardening: HTTP timeouts + retry/backoff, JSON logs with request ids, `/metrics`, OTEL tracing, `/readyz`, graceful shutdown, ruff/mypy, Postgres+Redis integration CI, GHCR image publishing; fixes the deferred duplicate-session bug |
+
+**Follow-up (not in this repo yet):** Phase 8 — Devin Security Swarm, an optional additional `DiscoverySource` implementation (`app/discovery/base.py`) selected with the `DISCOVERY_SOURCE` toggle alongside Semgrep. Nothing in Phases 1-7 depends on it.
+
+## Production hardening (Phase 7)
+
+### Outbound HTTP resilience
+
+Every GitHub and Devin call goes through `app/http_client.py`: `client()` builds an `httpx.Client` with connect/read/write/pool timeouts (`HTTP_CONNECT_TIMEOUT`, `HTTP_READ_TIMEOUT`) and `request()` retries with exponential backoff + full jitter (`HTTP_MAX_ATTEMPTS`, `HTTP_BACKOFF_BASE_SECONDS`, `HTTP_BACKOFF_CAP_SECONDS`):
+
+| Failure | GET / HEAD / OPTIONS / PUT / DELETE | POST (`create_issue`, `create_session`, `post_comment`, ...) |
+|---|---|---|
+| timeout / connection error | retried | **not retried** (the request may have been applied) |
+| 500 / 502 / 503 / 504 | retried | **not retried** |
+| 429 | retried, honouring `Retry-After` (seconds or HTTP-date, capped) | retried, honouring `Retry-After` (nothing was applied) |
+| other 4xx | raised immediately | raised immediately |
+
+Public function signatures in `app/github.py` / `app/devin.py` are unchanged. Each retry increments `external_http_retries_total{host}`.
+
+### Observability
+
+- **Structured logs.** `LOG_FORMAT=json` (default) emits one JSON object per line with `ts`, `level`, `logger`, `message`, `request_id` and, when a span is active, `trace_id`/`span_id`. `LOG_FORMAT=text` for local development.
+- **Request ids.** The API accepts `X-Request-ID` (or generates one) and echoes it on the response; it is propagated into every Celery task published from that request (task header) so worker logs for a scan/remediation/poll carry the same id.
+- **Metrics.** `GET /metrics` on the `api` service: HTTP request metrics (`prometheus-fastapi-instrumentator`) plus domain counters `remediation_sessions_created_total`, `remediation_session_create_failures_total`, `remediation_polls_total{outcome}`, `remediation_outcomes_total{status}`, `remediation_claim_conflicts_total`, `discovery_findings_total{source}`, `discovery_issues_created_total`, `external_http_retries_total{host}`. Workers share the counter definitions; scrape them by running a worker-side exporter if needed.
+- **Tracing.** OpenTelemetry spans wrap incoming API requests, every outbound HTTP attempt, Devin session create/poll, GitHub scans and each Celery task. Set `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP/HTTP, e.g. `http://otel-collector:4318`) and optionally `OTEL_SERVICE_NAME` / `SERVICE_NAME` to export; unset, the SDK is a no-op.
+- **Probes.** `GET /healthz` (liveness: DB ping, unchanged) and `GET /readyz` (readiness: `SELECT 1` **and** a broker connection). Compose and k8s use `/readyz` for readiness so pods stop receiving traffic when Redis is unreachable.
+
+### Graceful shutdown & restarts
+
+- **api:** uvicorn `--timeout-graceful-shutdown 20`; the lifespan flushes the tracer, disposes the SQLAlchemy engine and closes Celery connections. `stop_grace_period: 30s` / `terminationGracePeriodSeconds: 30`.
+- **workers:** `task_acks_late=True`, `worker_prefetch_multiplier=1` and `worker_cancel_long_running_tasks_on_connection_loss=True`, so a killed worker's in-flight task is redelivered instead of lost; `CELERY_TASK_SOFT_TIME_LIMIT` / `CELERY_TASK_TIME_LIMIT` bound runaway tasks. Grace period 2 min so warm shutdown can drain.
+- **Poll chain across restarts:** each poll is guarded by a `poll_token` + `poll_lease_until` lease in Postgres. A redelivered or duplicate poll for a stale token is a no-op; a lease that expires (worker died mid-poll) is re-armed by the next reconciliation scan.
+- **Deferred bug (duplicate Devin sessions).** Overlapping remediation tasks for the same issue (webhook + reconciliation scan, or a redelivered task) used to both see "not running" and each open a Devin session. `store.claim_remediation()` now reserves the issue atomically (`INSERT ... ON CONFLICT DO NOTHING ... RETURNING` / conditional `UPDATE`): exactly one caller wins, rows with a live `session_id` are never reclaimed, and a `running` row without a session (worker died between claim and `create_session`) becomes reclaimable only after its creation lease expires. Regression tests: `tests/test_remediation_claim.py`.
+
+### Lint, type-check and CI
+
+`uv run ruff check . && uv run ruff format --check . && uv run mypy` must pass. `.github/workflows/tests.yml` runs on every PR: `lint` (ruff), `typecheck` (mypy over `app/`), `test` (pytest on SQLite), `integration` (Alembic migrations + pytest against Postgres 16 and Redis 7 service containers — exercises the dialect-specific atomic claim, `/readyz` broker check and request-id propagation through a real Celery worker, `tests/test_integration.py`), `frontend` (oxlint + Vite build), `e2e` (Playwright, uploads `playwright-screenshots-videos` + `playwright-report` artifacts) and `image-build` (builds both Dockerfiles without pushing).
+
+### Image publishing & deployment
+
+`.github/workflows/images.yml` builds and pushes `ghcr.io/<owner>/devin-remediation-service/service` and `.../frontend` on every push to `main`, tagged with the full commit SHA and `main`, authenticated with the workflow's `GITHUB_TOKEN` (no extra secrets). The `deploy` job is gated: it only runs when the repository variable `DEPLOY_ENABLED=true` and the `production` environment provides `DEPLOY_KUBECONFIG` (base64 kubeconfig); it then `kubectl set image`s the `devin-remediation` deployments to the SHA tag. Without those, deploy is skipped and CI stays green.
+
+### Secrets management
+
+`.env` is git-ignored; `.env.example` lists every key with placeholders only. In production do not mount a `.env` file: source `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, `GITHUB_WEBHOOK_SECRET`, `INGEST_TOKEN` and `POSTGRES_PASSWORD` from a secret manager (External Secrets Operator / Vault Agent / AWS Secrets Manager / GCP Secret Manager) into the `remediation-secrets` Kubernetes Secret (`k8s/secret.example.yaml`) or compose `secrets:`. Rotate by updating the manager and restarting deployments; nothing secret is baked into the images.
 
 ## Project structure
 
@@ -248,7 +294,7 @@ This service was built as six PRs: phases 1-5 stacked, each branched off the pre
 app/
 ├── main.py         # FastAPI app for the api service: startup (enqueues initial scan), mounts routers
 ├── api/
-│   ├── read.py      # GET /, /status, /status/{n}, /healthz (read layer for the future SPA)
+│   ├── read.py      # GET /, /status, /status/{n}, /healthz, /readyz, /metrics (read layer for the SPA)
 │   └── ingest.py    # POST /scan, /webhooks/github, /ingest/semgrep (hand off to Orchestrator)
 ├── remediation.py  # Scheduler-agnostic business logic (scan, process issue, poll session)
 ├── celery_app.py   # Celery app + Beat schedule, configured from env
@@ -262,6 +308,8 @@ app/
 │   ├── semgrep.py   # SemgrepDiscoverySource + parse_sarif
 │   └── ingest.py    # ingest_findings: fingerprint dedup -> github.create_issue
 ├── webhooks.py     # HMAC verification + issues/pull_request event normalization
+├── http_client.py  # Shared httpx client: timeouts + idempotency-aware retry/backoff
+├── observability.py # JSON logging, request ids, Prometheus counters, OTEL tracing, Celery signals
 ├── github.py       # GitHub API client (issues, PRs, comments, webhooks)
 ├── devin.py        # Devin API client
 ├── store.py        # Persistent task store (same API as the old in-memory store)

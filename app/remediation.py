@@ -15,6 +15,14 @@ implementation (Celery today, Temporal later) can wrap them.
 import logging
 
 from app import devin, github, store
+from app.observability import (
+    CLAIM_CONFLICTS,
+    POLLS,
+    REMEDIATION_OUTCOMES,
+    SESSION_CREATE_FAILURES,
+    SESSIONS_CREATED,
+    span,
+)
 from app.orchestrator import get_orchestrator
 from app.orchestrator.base import POLL_INTERVAL_SECONDS, POLL_LEASE_GRACE_SECONDS
 
@@ -116,10 +124,13 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     # comment on the issue with the session URL.
     if not store.claim_remediation(number, title, issue_url, CREATE_LEASE_SECONDS):
         log.info("Issue #%d already claimed by another remediation task — skipping", number)
+        CLAIM_CONFLICTS.inc()
         return False
     log.info("Creating Devin session for issue #%d: %s", number, title)
     try:
-        result = devin.create_session(number, title, body)
+        with span("devin.create_session", issue_number=number):
+            result = devin.create_session(number, title, body)
+        SESSIONS_CREATED.inc()
         session_id = result.get("session_id") or result.get("id")
         session_url = result.get("url") or result.get("session_url")
         store.upsert(
@@ -135,6 +146,8 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
             log.warning("Could not post comment on issue #%d: %s", number, comment_exc)
     except Exception as exc:
         log.error("Failed to create Devin session for issue #%d: %s", number, exc)
+        SESSION_CREATE_FAILURES.inc()
+        REMEDIATION_OUTCOMES.labels(status="failed").inc()
         store.upsert(number, status="failed")
         store.release_poll(number)
         return False
@@ -150,7 +163,8 @@ def scan_and_process(force_retry: bool = False) -> dict:
     marked running but has no poll in flight (e.g. after a worker restart)."""
     log.info("Starting issue scan (force_retry=%s)", force_retry)
     try:
-        issues = github.get_labeled_issues()
+        with span("github.get_labeled_issues"):
+            issues = github.get_labeled_issues()
     except Exception as exc:
         log.error("Failed to fetch issues from GitHub: %s", exc)
         return {"error": str(exc)}
@@ -189,14 +203,18 @@ def poll_session_once(issue_number: int, session_id: str, poll_token: str) -> bo
     entry = store.get(issue_number)
     if not entry or entry["status"] != "running" or entry["session_id"] != session_id:
         # Superseded (retried, completed elsewhere, or cleared) — stop polling.
+        POLLS.labels(outcome="superseded").inc()
         return False
     if entry["poll_token"] != poll_token:
         # Lease re-claimed by another chain — stop.
+        POLLS.labels(outcome="superseded").inc()
         return False
     try:
-        data = devin.get_session(session_id)
+        with span("devin.get_session", issue_number=issue_number, session_id=session_id):
+            data = devin.get_session(session_id)
     except Exception as exc:
         log.warning("Could not poll session %s: %s", session_id, exc)
+        POLLS.labels(outcome="error").inc()
         return True
 
     raw_status = data.get("status")
@@ -219,7 +237,9 @@ def poll_session_once(issue_number: int, session_id: str, poll_token: str) -> bo
     if pr_url and new_status == "running":
         new_status = "completed"
     store.upsert(issue_number, status=new_status, pr_url=pr_url)
+    POLLS.labels(outcome=new_status).inc()
     if new_status != "running":
+        REMEDIATION_OUTCOMES.labels(status=new_status).inc()
         store.release_poll(issue_number, poll_token=poll_token)
         return False
     return True

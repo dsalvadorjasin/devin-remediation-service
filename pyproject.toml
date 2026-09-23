@@ -16,15 +16,24 @@ dependencies = [
     "celery[redis]>=5.4,<6",
     "redis>=5,<7",
     "semgrep>=1.139,<2",
+    "prometheus-client>=0.20,<1",
+    "prometheus-fastapi-instrumentator>=7,<8",
+    "opentelemetry-api>=1.25,<2",
+    "opentelemetry-sdk>=1.25,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.25,<2",
 ]
 
 [dependency-groups]
 dev = [
+    "celery-types>=0.26.0",
     "fakeredis>=2.23,<3",
+    "mypy>=1.10,<2",
     "pytest==8.2.2",
     "pytest-asyncio==0.23.7",
     "pytest-httpx==0.30.0",
     "pyyaml>=6,<7",
+    "ruff>=0.6,<1",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [build-system]

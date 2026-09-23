@@ -25,6 +25,8 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from app.observability import EXTERNAL_RETRIES, span
+
 log = logging.getLogger(__name__)
 
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
@@ -105,13 +107,19 @@ def request(
     base = _float_env("HTTP_BACKOFF_BASE_SECONDS", 0.5)
     cap = _float_env("HTTP_BACKOFF_CAP_SECONDS", 20.0)
 
+    host = httpx.URL(url).host
     for attempt in range(attempts):
         last = attempt == attempts - 1
         try:
-            response = http.request(method, url, **kwargs)
+            with span(
+                f"http {method}",
+                **{"http.method": method, "http.url": url, "http.retry_attempt": attempt},
+            ):
+                response = http.request(method, url, **kwargs)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             if last or not idempotent:
                 raise
+            EXTERNAL_RETRIES.labels(host=host).inc()
             delay = backoff_seconds(attempt, base, cap)
             log.warning(
                 "%s %s failed (%s); retry %d/%d in %.2fs",
@@ -125,6 +133,7 @@ def request(
         if not retryable or last:
             response.raise_for_status()
             return response
+        EXTERNAL_RETRIES.labels(host=host).inc()
         delay = retry_after_seconds(response)
         if delay is None:
             delay = backoff_seconds(attempt, base, cap)

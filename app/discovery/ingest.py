@@ -10,6 +10,7 @@ import os
 
 from app import github
 from app.discovery.base import Finding
+from app.observability import DISCOVERY_FINDINGS, DISCOVERY_ISSUES_CREATED
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ def ingest_findings(
     leading findings."""
     if max_new is None:
         max_new = max_new_issues()
+    for f in findings:
+        DISCOVERY_FINDINGS.labels(source=f.source).inc()
     existing = github.find_issues_by_fingerprint([f.fingerprint for f in findings])
     created: list[dict] = []
     skipped: list[str] = []
@@ -43,6 +46,7 @@ def ingest_findings(
             continue
         issue = github.create_issue(f.title, f.issue_body())
         log.info("Created issue #%s for %s", issue.get("number"), f.title)
+        DISCOVERY_ISSUES_CREATED.inc()
         created.append(
             {"fingerprint": f.fingerprint, "number": issue.get("number"), "html_url": issue.get("html_url")}
         )

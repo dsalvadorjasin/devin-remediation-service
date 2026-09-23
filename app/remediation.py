@@ -126,9 +126,13 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     try:
         with span("devin.create_session", issue_number=number):
             result = devin.create_session(number, title, body)
-        SESSIONS_CREATED.inc()
         session_id = result.get("session_id") or result.get("id")
         session_url = result.get("url") or result.get("session_url")
+        if not session_id:
+            raise RuntimeError(
+                f"Devin response has no session id (url={session_url!r}): {result!r}"
+            )
+        SESSIONS_CREATED.inc()
         store.upsert(number, session_id=session_id, session_url=session_url, status="running")
         log.info("Session %s created for issue #%d", session_id, number)
         try:
@@ -146,8 +150,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
         store.release_poll(number)
         return False
 
-    if session_id:
-        arm_poll(number, session_id)
+    arm_poll(number, session_id)
     return True
 
 

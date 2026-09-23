@@ -136,3 +136,27 @@ def test_failed_session_creation_releases_claim(monkeypatch, scheduled_polls):
     assert entry["poll_lease_until"] is None
     assert remediation.process_issue(ISSUE, force_retry=True) is False
     assert store.get(11)["status"] == "failed"
+
+
+def test_session_response_without_id_is_a_failure(monkeypatch, scheduled_polls):
+    """A 'successful' Devin response with no session id must not leave a
+    session-less running row that a later scan would reclaim into a second
+    session; it is treated as a creation failure."""
+    monkeypatch.setattr(github, "find_existing_pr", lambda number: None)
+    monkeypatch.setattr(github, "post_comment", lambda *a, **k: None)
+    calls: list[int] = []
+
+    def no_id(number, title, body):
+        calls.append(number)
+        return {"url": "https://app.devin.ai/sessions/s-42"}
+
+    monkeypatch.setattr(devin, "create_session", no_id)
+    assert remediation.process_issue(ISSUE) is False
+    entry = store.get(11)
+    assert entry["status"] == "failed"
+    assert entry["session_id"] is None
+    assert entry["poll_lease_until"] is None
+    assert scheduled_polls == []
+    # Reconciliation scans do not retry a failed row without force_retry.
+    assert remediation.process_issue(ISSUE) is False
+    assert calls == [11]

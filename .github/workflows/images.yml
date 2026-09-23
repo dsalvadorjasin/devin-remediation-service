@@ -68,12 +68,7 @@ jobs:
           mkdir -p ~/.kube
           printf '%s' "${{ secrets.DEPLOY_KUBECONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
+      # Same release recipe as manual releases: re-run the migration Job on the
+      # new image, wait for it, then wait for every Deployment's rollout.
       - name: Roll out ${{ github.sha }}
-        run: |
-          IMAGE="${IMAGE_PREFIX}/service:${GITHUB_SHA}"
-          NS=devin-remediation
-          kubectl -n "$NS" set image deployment/remediation-api wait-for-migrations="$IMAGE" api="$IMAGE"
-          kubectl -n "$NS" set image deployment/remediation-ingest-worker wait-for-migrations="$IMAGE" worker="$IMAGE"
-          kubectl -n "$NS" set image deployment/remediation-devin-worker wait-for-migrations="$IMAGE" worker="$IMAGE"
-          kubectl -n "$NS" set image deployment/remediation-beat wait-for-migrations="$IMAGE" beat="$IMAGE"
-          kubectl -n "$NS" rollout status deployment/remediation-api --timeout=180s
+        run: sh k8s/deploy.sh "${IMAGE_PREFIX}/service:${GITHUB_SHA}" devin-remediation

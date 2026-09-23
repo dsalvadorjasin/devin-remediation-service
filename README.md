@@ -282,7 +282,7 @@ Public function signatures in `app/github.py` / `app/devin.py` are unchanged. Ea
 
 ### Image publishing & deployment
 
-`.github/workflows/images.yml` builds and pushes `ghcr.io/<owner>/devin-remediation-service/service` and `.../frontend` on every push to `main`, tagged with the full commit SHA and `main`, authenticated with the workflow's `GITHUB_TOKEN` (no extra secrets). The `deploy` job is gated: it only runs when the repository variable `DEPLOY_ENABLED=true` and the `production` environment provides `DEPLOY_KUBECONFIG` (base64 kubeconfig); it then `kubectl set image`s the `devin-remediation` deployments to the SHA tag. Without those, deploy is skipped and CI stays green.
+`.github/workflows/images.yml` builds and pushes `ghcr.io/<owner>/devin-remediation-service/service` and `.../frontend` on every push to `main`, tagged with the full commit SHA and `main`, authenticated with the workflow's `GITHUB_TOKEN` (no extra secrets). The `deploy` job is gated: it only runs when the repository variable `DEPLOY_ENABLED=true` and the `production` environment provides `DEPLOY_KUBECONFIG` (base64 kubeconfig); it then runs `k8s/deploy.sh <image>:<sha> devin-remediation` (migration Job, then every Deployment rollout). Without those, deploy is skipped and CI stays green.
 
 ### Secrets management
 

@@ -105,9 +105,11 @@ def request(
     method = method.upper()
     if idempotent is None:
         idempotent = method in IDEMPOTENT_METHODS
-    attempts = max_attempts if max_attempts is not None else _int_env("HTTP_MAX_ATTEMPTS", 4)
-    base = _float_env("HTTP_BACKOFF_BASE_SECONDS", 0.5)
-    cap = _float_env("HTTP_BACKOFF_CAP_SECONDS", 20.0)
+    attempts = max(
+        1, max_attempts if max_attempts is not None else _int_env("HTTP_MAX_ATTEMPTS", 4)
+    )
+    base = max(0.0, _float_env("HTTP_BACKOFF_BASE_SECONDS", 0.5))
+    cap = max(0.0, _float_env("HTTP_BACKOFF_CAP_SECONDS", 20.0))
 
     host = httpx.URL(url).host
     for attempt in range(attempts):

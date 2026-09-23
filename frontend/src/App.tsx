@@ -1,27 +1,34 @@
-import { useEffect, useState } from 'react'
-import { fetchStatus } from './api/client'
-import type { TaskView } from './api/types'
+import './App.css'
 import { POLL_MS } from './api/types'
+import { SummaryCards } from './components/SummaryCards'
+import { TaskTable } from './components/TaskTable'
+import { usePolledStatus } from './hooks/usePolledStatus'
 
-/** Scaffold placeholder: Lane A replaces this with the full dashboard. */
 export default function App() {
-  const [rows, setRows] = useState<TaskView[]>([])
-
-  useEffect(() => {
-    let cancelled = false
-    const tick = () => fetchStatus().then((r) => !cancelled && setRows(r)).catch(console.error)
-    tick()
-    const id = setInterval(tick, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  const { rows, lastUpdated, error } = usePolledStatus(POLL_MS)
 
   return (
     <main data-testid="dashboard">
-      <h1>Devin Remediation Dashboard</h1>
-      <p data-testid="row-count">{rows.length} tasks</p>
+      <header>
+        <h1>
+          Devin <span>Remediation</span> Dashboard
+        </h1>
+        <div className="controls">
+          <span className="last-updated" data-testid="last-updated">
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : '—'}
+          </span>
+        </div>
+      </header>
+
+      {error && (
+        <div className="error-banner" role="alert" data-testid="error-banner">
+          Failed to refresh: {error.message}
+          {lastUpdated && ' — showing last known data.'}
+        </div>
+      )}
+
+      <SummaryCards rows={rows} />
+      <TaskTable rows={rows} />
     </main>
   )
 }

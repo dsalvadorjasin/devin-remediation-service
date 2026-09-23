@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
             print("GITHUB_WEBHOOK_SECRET is not set", file=sys.stderr)
             return 2
         hook = github.create_webhook(args.base_url.rstrip("/") + WEBHOOK_PATH, secret)
-        print(json.dumps({"id": hook["id"], "url": hook["config"]["url"], "events": hook["events"]}))
+        print(
+            json.dumps({"id": hook["id"], "url": hook["config"]["url"], "events": hook["events"]})
+        )
         return 0
 
     if args.cmd == "list":
@@ -54,7 +56,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "delete":
         ids = [args.hook_id] if args.hook_id else []
         if args.all_service:
-            ids += [h["id"] for h in github.list_webhooks() if h["config"].get("url", "").endswith(WEBHOOK_PATH)]
+            ids += [
+                h["id"]
+                for h in github.list_webhooks()
+                if h["config"].get("url", "").endswith(WEBHOOK_PATH)
+            ]
         ids = list(dict.fromkeys(ids))
         for hid in ids:
             github.delete_webhook(hid)

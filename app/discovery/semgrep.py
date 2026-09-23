@@ -37,10 +37,7 @@ def _severity(result: dict, rule: dict | None) -> str:
 def parse_sarif(sarif: dict) -> list[Finding]:
     findings: list[Finding] = []
     for run in sarif.get("runs", []):
-        rules = {
-            r.get("id"): r
-            for r in run.get("tool", {}).get("driver", {}).get("rules", [])
-        }
+        rules = {r.get("id"): r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
         for result in run.get("results", []):
             rule_id = result.get("ruleId") or ""
             rule = rules.get(rule_id)
@@ -86,8 +83,10 @@ class SemgrepDiscoverySource(DiscoverySource):
         token: str | None = None,
     ):
         self.repo = repo or os.environ["GITHUB_REPO"]
-        self.checkout_dir = Path(checkout_dir or os.getenv("SEMGREP_CHECKOUT_DIR", DEFAULT_CHECKOUT_DIR))
-        self.config = config or os.getenv("SEMGREP_CONFIG", DEFAULT_CONFIG)
+        self.checkout_dir = Path(
+            checkout_dir or os.getenv("SEMGREP_CHECKOUT_DIR") or DEFAULT_CHECKOUT_DIR
+        )
+        self.config: str = config or os.getenv("SEMGREP_CONFIG") or DEFAULT_CONFIG
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "")
 
     def _clone_url(self) -> str:
@@ -97,8 +96,12 @@ class SemgrepDiscoverySource(DiscoverySource):
     def update_checkout(self) -> Path:
         if (self.checkout_dir / ".git").exists():
             log.info("Updating checkout of %s in %s", self.repo, self.checkout_dir)
-            subprocess.run(["git", "-C", str(self.checkout_dir), "fetch", "--depth", "1", "origin"], check=True)
-            subprocess.run(["git", "-C", str(self.checkout_dir), "reset", "--hard", "origin/HEAD"], check=True)
+            subprocess.run(
+                ["git", "-C", str(self.checkout_dir), "fetch", "--depth", "1", "origin"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(self.checkout_dir), "reset", "--hard", "origin/HEAD"], check=True
+            )
         else:
             if self.checkout_dir.exists():
                 shutil.rmtree(self.checkout_dir)
@@ -114,11 +117,25 @@ class SemgrepDiscoverySource(DiscoverySource):
         """Environment for the scanner subprocess: only what semgrep needs, none of
         the worker's service credentials (GitHub, Devin, database, broker)."""
         keep = {
-            "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CACHE_HOME",
+            "PATH",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
             # registry/rule downloads must still honour the worker's egress settings
-            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-            "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-            "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
         }
         return {k: v for k, v in os.environ.items() if k in keep or k.startswith("SEMGREP_")}
 
@@ -136,7 +153,9 @@ class SemgrepDiscoverySource(DiscoverySource):
             str(target),
         ]
         log.info("Running: %s", " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(target), env=self.scan_env())
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=str(target), env=self.scan_env()
+        )
         if proc.returncode not in (0, 1):  # 1 = findings present
             raise RuntimeError(f"semgrep failed ({proc.returncode}): {proc.stderr[-2000:]}")
         return json.loads(proc.stdout)
@@ -146,7 +165,12 @@ class SemgrepDiscoverySource(DiscoverySource):
         findings = parse_sarif(self.run_semgrep(target))
         prefix = str(target).rstrip("/") + "/"
         findings = [
-            Finding(**{**f.to_dict(), "file_path": f.file_path.removeprefix(prefix).removeprefix("file://")})
+            Finding(
+                **{
+                    **f.to_dict(),
+                    "file_path": f.file_path.removeprefix(prefix).removeprefix("file://"),
+                }
+            )
             for f in findings
         ]
         log.info("Semgrep produced %d finding(s)", len(findings))

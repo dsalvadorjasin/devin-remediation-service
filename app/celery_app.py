@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app import observability  # noqa: E402,F401  (registers Celery signal handlers)
+
 
 def _truthy(value: str | None) -> bool:
     return (value or "").lower() in ("1", "true", "yes", "on")
@@ -43,6 +45,12 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     broker_connection_retry_on_startup=True,
+    # Graceful shutdown: SIGTERM triggers a warm shutdown (stop consuming,
+    # finish in-flight tasks). With acks_late, anything still unfinished when
+    # the process is killed is redelivered to another worker.
+    worker_cancel_long_running_tasks_on_connection_loss=True,
+    task_soft_time_limit=int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "900")),
+    task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", "1200")),
     # Two deployables share one codebase and are separated by queue:
     #   ingest-worker: `celery worker -Q ingest`  (GitHub listing, Semgrep)
     #   devin-worker:  `celery worker -Q devin`   (session creation + polling)

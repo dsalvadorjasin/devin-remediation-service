@@ -1,6 +1,9 @@
 """
 GitHub REST API client for the Devin remediation service.
 
+All calls go through app.http_client (explicit timeouts; retries with
+exponential backoff + jitter for idempotent GET/DELETE and for 429 on POST).
+
 Provides three operations used by main.py to drive the automation loop:
 - Fetching open issues tagged with the remediation label.
 - Detecting whether an open PR already exists for a given issue.
@@ -9,7 +12,7 @@ Provides three operations used by main.py to drive the automation loop:
 
 import os
 
-import httpx
+from app import http_client
 
 GITHUB_API = "https://api.github.com"
 LABEL = "devin-remediate"
@@ -34,11 +37,10 @@ def get_labeled_issues() -> list[dict]:
     url = f"{GITHUB_API}/repos/{_repo()}/issues"
     issues: list[dict] = []
     page = 1
-    with httpx.Client() as client:
+    with http_client.client() as client:
         while True:
             params = {"labels": LABEL, "state": "open", "per_page": 100, "page": page}
-            resp = client.get(url, headers=_headers(), params=params)
-            resp.raise_for_status()
+            resp = http_client.request(client, "GET", url, headers=_headers(), params=params)
             batch = resp.json()
             # Exclude pull requests (GitHub returns PRs as issues too)
             issues.extend(i for i in batch if "pull_request" not in i)
@@ -62,9 +64,10 @@ def find_existing_pr(issue_number: int) -> str | None:
 
     # --- check 1: timeline cross-references ---
     timeline_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_number}/timeline"
-    with httpx.Client() as client:
-        resp = client.get(timeline_url, headers=_headers(), params={"per_page": 100})
-        resp.raise_for_status()
+    with http_client.client() as client:
+        resp = http_client.request(
+            client, "GET", timeline_url, headers=_headers(), params={"per_page": 100}
+        )
     for event in resp.json():
         if event.get("event") != "cross-referenced":
             continue
@@ -75,11 +78,10 @@ def find_existing_pr(issue_number: int) -> str | None:
     # --- check 2: scan open PRs for title/body mention of #issue_number ---
     prs_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls"
     needle = f"#{issue_number}"
-    with httpx.Client() as client:
-        resp = client.get(
-            prs_url, headers=_headers(), params={"state": "open", "per_page": 100}
+    with http_client.client() as client:
+        resp = http_client.request(
+            client, "GET", prs_url, headers=_headers(), params={"state": "open", "per_page": 100}
         )
-        resp.raise_for_status()
     for pr in resp.json():
         title = pr.get("title", "")
         body = pr.get("body") or ""
@@ -92,37 +94,35 @@ def find_existing_pr(issue_number: int) -> str | None:
 def post_comment(issue_number: int, body: str) -> None:
     """Post a comment on a GitHub issue."""
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/comments"
-    with httpx.Client() as client:
-        resp = client.post(url, headers=_headers(), json={"body": body})
-        resp.raise_for_status()
+    with http_client.client() as client:
+        http_client.request(client, "POST", url, headers=_headers(), json={"body": body})
 
 
 def get_issue(issue_number: int) -> dict:
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}"
-    with httpx.Client() as client:
-        resp = client.get(url, headers=_headers())
-        resp.raise_for_status()
+    with http_client.client() as client:
+        resp = http_client.request(client, "GET", url, headers=_headers())
     return resp.json()
 
 
 def add_labels(issue_number: int, labels: list[str]) -> None:
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/labels"
-    with httpx.Client() as client:
-        resp = client.post(url, headers=_headers(), json={"labels": labels})
-        resp.raise_for_status()
+    with http_client.client() as client:
+        http_client.request(client, "POST", url, headers=_headers(), json={"labels": labels})
 
 
 def create_issue(title: str, body: str, labels: list[str] | None = None) -> dict:
     """Create an issue (Issues: write). Defaults to the remediation label."""
     url = f"{GITHUB_API}/repos/{_repo()}/issues"
     payload = {"title": title, "body": body, "labels": labels if labels is not None else [LABEL]}
-    with httpx.Client() as client:
-        resp = client.post(url, headers=_headers(), json=payload)
-        resp.raise_for_status()
+    with http_client.client() as client:
+        resp = http_client.request(client, "POST", url, headers=_headers(), json=payload)
     return resp.json()
 
 
-def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-fingerprint") -> dict[str, dict]:
+def find_issues_by_fingerprint(
+    fingerprints: list[str], marker: str = "semgrep-fingerprint"
+) -> dict[str, dict]:
     """Map fingerprint -> issue (open or closed) whose body contains
     `<!-- {marker}: {fingerprint} -->`. Closed issues count: a finding that
     was triaged/closed must not be re-filed every run. One paginated listing
@@ -133,14 +133,15 @@ def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-f
         return found
     url = f"{GITHUB_API}/repos/{_repo()}/issues"
     page = 1
-    with httpx.Client() as client:
+    with http_client.client() as client:
         while True:
-            resp = client.get(
+            resp = http_client.request(
+                client,
+                "GET",
                 url,
                 headers=_headers(),
                 params={"labels": LABEL, "state": "all", "per_page": 100, "page": page},
             )
-            resp.raise_for_status()
             issues = resp.json()
             for issue in issues:
                 if "pull_request" in issue:
@@ -160,9 +161,8 @@ def find_issues_by_fingerprint(fingerprints: list[str], marker: str = "semgrep-f
 
 def list_webhooks() -> list[dict]:
     url = f"{GITHUB_API}/repos/{_repo()}/hooks"
-    with httpx.Client() as client:
-        resp = client.get(url, headers=_headers(), params={"per_page": 100})
-        resp.raise_for_status()
+    with http_client.client() as client:
+        resp = http_client.request(client, "GET", url, headers=_headers(), params={"per_page": 100})
     return resp.json()
 
 
@@ -182,14 +182,12 @@ def create_webhook(payload_url: str, secret: str, events: list[str] | None = Non
             "insecure_ssl": "0",
         },
     }
-    with httpx.Client() as client:
-        resp = client.post(url, headers=_headers(), json=body)
-        resp.raise_for_status()
+    with http_client.client() as client:
+        resp = http_client.request(client, "POST", url, headers=_headers(), json=body)
     return resp.json()
 
 
 def delete_webhook(hook_id: int) -> None:
     url = f"{GITHUB_API}/repos/{_repo()}/hooks/{hook_id}"
-    with httpx.Client() as client:
-        resp = client.delete(url, headers=_headers())
-        resp.raise_for_status()
+    with http_client.client() as client:
+        http_client.request(client, "DELETE", url, headers=_headers())

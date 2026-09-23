@@ -15,10 +15,23 @@ implementation (Celery today, Temporal later) can wrap them.
 import logging
 
 from app import devin, github, store
+from app.observability import (
+    CLAIM_CONFLICTS,
+    POLLS,
+    REMEDIATION_OUTCOMES,
+    SESSION_CREATE_FAILURES,
+    SESSIONS_CREATED,
+    span,
+)
 from app.orchestrator import get_orchestrator
 from app.orchestrator.base import POLL_INTERVAL_SECONDS, POLL_LEASE_GRACE_SECONDS
 
 log = logging.getLogger(__name__)
+
+# How long a remediation claim (row `running` with no session yet) stays
+# reserved before the reconciliation scan may hand the issue to a new task.
+# Must comfortably exceed a Devin create_session round trip including retries.
+CREATE_LEASE_SECONDS = 10 * 60
 
 
 def _lease_seconds(delay_seconds: int) -> int:
@@ -42,9 +55,7 @@ def arm_poll(
     return _publish_poll(issue_number, session_id, delay_seconds, token)
 
 
-def continue_poll(
-    issue_number: int, session_id: str, poll_token: str, delay_seconds: int
-) -> None:
+def continue_poll(issue_number: int, session_id: str, poll_token: str, delay_seconds: int) -> None:
     """Renew the lease held by an existing chain and schedule its next poll."""
     if not store.renew_poll(issue_number, poll_token, _lease_seconds(delay_seconds)):
         return
@@ -72,6 +83,12 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     - failed → skip unless force_retry=True.
     - not in store, or completed with no open PR → create session.
 
+    The final gate is ``store.claim_remediation``, a single atomic statement,
+    so overlapping tasks for the same issue (replica startup scans, Beat,
+    /scan, webhook redeliveries) can never both reach ``create_session``.
+    A stranded claim (worker died before saving the session) expires after
+    CREATE_LEASE_SECONDS and is then re-claimable.
+
     Returns True when a session was created (and a poll scheduled).
     """
     # for valid keys in response, check GitHub API docs:
@@ -88,29 +105,35 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
     pr_url = github.find_existing_pr(number)
     if pr_url:
         log.info("Issue #%d already has open PR %s — marking completed", number, pr_url)
-        store.upsert(
-            number, title=title, issue_url=issue_url, status="completed", pr_url=pr_url
-        )
+        store.upsert(number, title=title, issue_url=issue_url, status="completed", pr_url=pr_url)
         return False
 
-    # 2. Currently running → never spawn a duplicate
-    if current_status == "running":
-        return False
+    # 2. Currently running → never spawn a duplicate. Enforced by the atomic
+    # claim below, which only lets a stranded claim (no session, expired
+    # creation lease) through.
 
     # 3. Failed → only retry when explicitly requested
     if current_status == "failed" and not force_retry:
         return False
 
-    # 4. Create a new Devin session, posting a comment on the issue with the session URL.
+    # 4. Atomically claim the issue, then create a Devin session and post a
+    # comment on the issue with the session URL.
+    if not store.claim_remediation(number, title, issue_url, CREATE_LEASE_SECONDS):
+        log.info("Issue #%d already claimed by another remediation task — skipping", number)
+        CLAIM_CONFLICTS.inc()
+        return False
     log.info("Creating Devin session for issue #%d: %s", number, title)
-    store.upsert(number, title=title, issue_url=issue_url, status="running")
     try:
-        result = devin.create_session(number, title, body)
+        with span("devin.create_session", issue_number=number):
+            result = devin.create_session(number, title, body)
         session_id = result.get("session_id") or result.get("id")
         session_url = result.get("url") or result.get("session_url")
-        store.upsert(
-            number, session_id=session_id, session_url=session_url, status="running"
-        )
+        if not session_id:
+            raise RuntimeError(
+                f"Devin response has no session id (url={session_url!r}): {result!r}"
+            )
+        SESSIONS_CREATED.inc()
+        store.upsert(number, session_id=session_id, session_url=session_url, status="running")
         log.info("Session %s created for issue #%d", session_id, number)
         try:
             github.post_comment(
@@ -121,11 +144,13 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
             log.warning("Could not post comment on issue #%d: %s", number, comment_exc)
     except Exception as exc:
         log.error("Failed to create Devin session for issue #%d: %s", number, exc)
+        SESSION_CREATE_FAILURES.inc()
+        REMEDIATION_OUTCOMES.labels(status="failed").inc()
         store.upsert(number, status="failed")
+        store.release_poll(number)
         return False
 
-    if session_id:
-        arm_poll(number, session_id)
+    arm_poll(number, session_id)
     return True
 
 
@@ -135,7 +160,8 @@ def scan_and_process(force_retry: bool = False) -> dict:
     marked running but has no poll in flight (e.g. after a worker restart)."""
     log.info("Starting issue scan (force_retry=%s)", force_retry)
     try:
-        issues = github.get_labeled_issues()
+        with span("github.get_labeled_issues"):
+            issues = github.get_labeled_issues()
     except Exception as exc:
         log.error("Failed to fetch issues from GitHub: %s", exc)
         return {"error": str(exc)}
@@ -147,9 +173,7 @@ def scan_and_process(force_retry: bool = False) -> dict:
 
     rearmed = 0
     for entry in store.get_unpolled_running():
-        if arm_poll(
-            entry["issue_number"], entry["session_id"], delay_seconds=0, only_if_lost=True
-        ):
+        if arm_poll(entry["issue_number"], entry["session_id"], delay_seconds=0, only_if_lost=True):
             rearmed += 1
             log.info(
                 "Re-armed lost poll for issue #%d (session %s)",
@@ -174,14 +198,18 @@ def poll_session_once(issue_number: int, session_id: str, poll_token: str) -> bo
     entry = store.get(issue_number)
     if not entry or entry["status"] != "running" or entry["session_id"] != session_id:
         # Superseded (retried, completed elsewhere, or cleared) — stop polling.
+        POLLS.labels(outcome="superseded").inc()
         return False
     if entry["poll_token"] != poll_token:
         # Lease re-claimed by another chain — stop.
+        POLLS.labels(outcome="superseded").inc()
         return False
     try:
-        data = devin.get_session(session_id)
+        with span("devin.get_session", issue_number=issue_number, session_id=session_id):
+            data = devin.get_session(session_id)
     except Exception as exc:
         log.warning("Could not poll session %s: %s", session_id, exc)
+        POLLS.labels(outcome="error").inc()
         return True
 
     raw_status = data.get("status")
@@ -204,7 +232,9 @@ def poll_session_once(issue_number: int, session_id: str, poll_token: str) -> bo
     if pr_url and new_status == "running":
         new_status = "completed"
     store.upsert(issue_number, status=new_status, pr_url=pr_url)
+    POLLS.labels(outcome=new_status).inc()
     if new_status != "running":
+        REMEDIATION_OUTCOMES.labels(status=new_status).inc()
         store.release_poll(issue_number, poll_token=poll_token)
         return False
     return True

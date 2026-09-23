@@ -6,11 +6,14 @@ Provides the operations used by main.py to delegate issue fixes to Devin:
 - Fetching the current state of a running session.
 - Mapping Devin's session status values to the internal status model (running, completed, failed).
 - Extracting a PR URL from a session response.
+
+Requests use app.http_client: shared timeouts, retries for GET (polling) and
+for 429 on session creation; a timed-out create is never blindly resent.
 """
 
 import os
 
-import httpx
+from app import http_client
 
 DEVIN_API = "https://api.devin.ai/v3"
 
@@ -54,13 +57,14 @@ def create_session(issue_number: int, title: str, body: str) -> dict:
         body=body or "No additional description provided.",
     )
     payload = {"prompt": prompt}
-    with httpx.Client(timeout=30) as client:
-        resp = client.post(
+    with http_client.client() as client:
+        resp = http_client.request(
+            client,
+            "POST",
             f"{DEVIN_API}/organizations/{_org_id()}/sessions",
             headers=_headers(),
             json=payload,
         )
-        resp.raise_for_status()
     return resp.json()
 
 
@@ -69,12 +73,13 @@ def get_session(session_id: str) -> dict:
     Fetch the current state of a Devin session.
     Returns the full response dict.
     """
-    with httpx.Client(timeout=30) as client:
-        resp = client.get(
+    with http_client.client() as client:
+        resp = http_client.request(
+            client,
+            "GET",
             f"{DEVIN_API}/organizations/{_org_id()}/sessions/{session_id}",
             headers=_headers(),
         )
-        resp.raise_for_status()
     return resp.json()
 
 

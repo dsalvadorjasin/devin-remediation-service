@@ -91,7 +91,11 @@ def test_issue_labeled_enqueues_remediation(secret, enqueued):
 
 def test_issue_labeled_with_other_label_ignored(secret, enqueued):
     client = TestClient(main.app)
-    payload = {"action": "labeled", "label": {"name": "bug"}, "issue": _issue(7, labels=("bug", github.LABEL))}
+    payload = {
+        "action": "labeled",
+        "label": {"name": "bug"},
+        "issue": _issue(7, labels=("bug", github.LABEL)),
+    }
     assert _post(client, "issues", payload).json()["action"] == "ignored"
     assert enqueued == []
 
@@ -134,7 +138,9 @@ def test_pr_opened_marks_referenced_issue_completed(secret, enqueued):
 
 
 def test_pr_closed_unmerged_requeues_issue(secret, enqueued, monkeypatch):
-    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(
+        7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99"
+    )
     monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
     client = TestClient(main.app)
     payload = {
@@ -154,8 +160,12 @@ def test_pr_closed_unmerged_requeues_issue(secret, enqueued, monkeypatch):
 
 def test_pr_closed_unmerged_requeues_by_stored_pr_url(secret, enqueued, monkeypatch):
     """The closing PR's text no longer mentions #7; the stored pr_url still links them."""
-    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
-    store.upsert(8, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/100")
+    store.upsert(
+        7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99"
+    )
+    store.upsert(
+        8, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/100"
+    )
     monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
     client = TestClient(main.app)
     payload = {
@@ -195,18 +205,28 @@ def test_webhook_requires_content_length(secret):
 
 
 def test_pr_merged_does_not_requeue(secret, enqueued):
-    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(
+        7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99"
+    )
     client = TestClient(main.app)
     payload = {
         "action": "closed",
-        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": True, "title": "Fix #7", "body": ""},
+        "pull_request": {
+            "html_url": "https://github.com/o/r/pull/99",
+            "state": "closed",
+            "merged": True,
+            "title": "Fix #7",
+            "body": "",
+        },
     }
     assert _post(client, "pull_request", payload).json()["issues"] == []
     assert enqueued == []
 
 
 def test_referenced_issues_parsing():
-    assert webhooks.referenced_issues({"title": "Fix #12 and #3", "body": "see org/repo#5 and #12"}) == {12, 3}
+    assert webhooks.referenced_issues(
+        {"title": "Fix #12 and #3", "body": "see org/repo#5 and #12"}
+    ) == {12, 3}
 
 
 def test_reconciliation_scan_still_works_without_webhook(monkeypatch, enqueued):
@@ -221,7 +241,11 @@ def test_create_and_delete_webhook(httpx_mock):
     httpx_mock.add_response(
         method="POST",
         url="https://api.github.com/repos/test-org/test-repo/hooks",
-        json={"id": 42, "config": {"url": "https://x/webhooks/github"}, "events": ["issues", "pull_request"]},
+        json={
+            "id": 42,
+            "config": {"url": "https://x/webhooks/github"},
+            "events": ["issues", "pull_request"],
+        },
     )
     hook = github.create_webhook("https://x/webhooks/github", "s3cret")
     assert hook["id"] == 42
@@ -229,7 +253,11 @@ def test_create_and_delete_webhook(httpx_mock):
     assert sent["config"]["secret"] == "s3cret"
     assert sent["events"] == ["issues", "pull_request"]
 
-    httpx_mock.add_response(method="DELETE", url="https://api.github.com/repos/test-org/test-repo/hooks/42", status_code=204)
+    httpx_mock.add_response(
+        method="DELETE",
+        url="https://api.github.com/repos/test-org/test-repo/hooks/42",
+        status_code=204,
+    )
     github.delete_webhook(42)
 
 
@@ -237,7 +265,11 @@ def test_webhook_script_delete_dedupes_ids(monkeypatch):
     import importlib
 
     script = importlib.import_module("scripts.webhook")
-    monkeypatch.setattr(github, "list_webhooks", lambda: [{"id": 42, "config": {"url": "https://x/webhooks/github"}}])
+    monkeypatch.setattr(
+        github,
+        "list_webhooks",
+        lambda: [{"id": 42, "config": {"url": "https://x/webhooks/github"}}],
+    )
     deleted = []
     monkeypatch.setattr(github, "delete_webhook", deleted.append)
     assert script.main(["delete", "42", "--all-service"]) == 0
@@ -246,12 +278,20 @@ def test_webhook_script_delete_dedupes_ids(monkeypatch):
 
 def test_pr_closed_replay_does_not_requeue_running_issue(secret, enqueued, monkeypatch):
     """A redelivered close event must not clobber the replacement session."""
-    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(
+        7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99"
+    )
     monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
     client = TestClient(main.app)
     payload = {
         "action": "closed",
-        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "Fix #7", "body": ""},
+        "pull_request": {
+            "html_url": "https://github.com/o/r/pull/99",
+            "state": "closed",
+            "merged": False,
+            "title": "Fix #7",
+            "body": "",
+        },
     }
     assert _post(client, "pull_request", payload).json()["issues"] == [7]
     assert not store.get(7)["pr_url"]
@@ -264,11 +304,19 @@ def test_pr_closed_replay_does_not_requeue_running_issue(secret, enqueued, monke
 def test_pr_closed_requeues_failed_issue_with_pr_url(secret, enqueued, monkeypatch):
     """A session that errored after opening a PR is still `failed` + pr_url;
     closing that PR must hand it back too."""
-    store.upsert(7, title="t", issue_url="u", status="failed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(
+        7, title="t", issue_url="u", status="failed", pr_url="https://github.com/o/r/pull/99"
+    )
     monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
     payload = {
         "action": "closed",
-        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "", "body": ""},
+        "pull_request": {
+            "html_url": "https://github.com/o/r/pull/99",
+            "state": "closed",
+            "merged": False,
+            "title": "",
+            "body": "",
+        },
     }
     assert _post(TestClient(main.app), "pull_request", payload).json()["issues"] == [7]
     assert enqueued == [(7, True)]
@@ -276,7 +324,9 @@ def test_pr_closed_requeues_failed_issue_with_pr_url(secret, enqueued, monkeypat
 
 
 def test_pr_closed_restores_pr_url_when_publish_fails(secret, enqueued, monkeypatch):
-    store.upsert(7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99")
+    store.upsert(
+        7, title="t", issue_url="u", status="completed", pr_url="https://github.com/o/r/pull/99"
+    )
     monkeypatch.setattr(github, "get_issue", lambda n: _issue(n))
 
     def boom(*a, **k):
@@ -285,7 +335,13 @@ def test_pr_closed_restores_pr_url_when_publish_fails(secret, enqueued, monkeypa
     monkeypatch.setattr(CeleryOrchestrator, "enqueue_remediation", boom)
     payload = {
         "action": "closed",
-        "pull_request": {"html_url": "https://github.com/o/r/pull/99", "state": "closed", "merged": False, "title": "", "body": ""},
+        "pull_request": {
+            "html_url": "https://github.com/o/r/pull/99",
+            "state": "closed",
+            "merged": False,
+            "title": "",
+            "body": "",
+        },
     }
     with pytest.raises(RuntimeError):
         _post(TestClient(main.app), "pull_request", payload)

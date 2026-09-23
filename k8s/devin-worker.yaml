@@ -11,6 +11,9 @@ spec:
     metadata:
       labels: {app: remediation-devin-worker, tier: worker}
     spec:
+      # Celery warm shutdown: stop consuming, finish in-flight tasks (acks_late
+      # means anything unfinished is redelivered), then exit.
+      terminationGracePeriodSeconds: 120
       initContainers:
         - name: wait-for-migrations
           image: devin-remediation-service

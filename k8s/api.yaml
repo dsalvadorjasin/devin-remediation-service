@@ -19,6 +19,9 @@ spec:
     metadata:
       labels: {app: remediation-api, tier: api}
     spec:
+      # uvicorn stops accepting on SIGTERM, drains in-flight requests, then the
+      # lifespan hook flushes traces and closes DB/broker connections.
+      terminationGracePeriodSeconds: 30
       initContainers:
         - name: wait-for-migrations
           image: devin-remediation-service
@@ -29,13 +32,13 @@ spec:
       containers:
         - name: api
           image: devin-remediation-service
-          command: [uv, run, uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]
+          command: [uv, run, uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000", --timeout-graceful-shutdown, "20"]
           ports: [{containerPort: 8000}]
           envFrom:
             - configMapRef: {name: remediation-config}
             - secretRef: {name: remediation-secrets}
           readinessProbe:
-            httpGet: {path: /healthz, port: 8000}
+            httpGet: {path: /readyz, port: 8000}
             periodSeconds: 10
           livenessProbe:
             httpGet: {path: /healthz, port: 8000}

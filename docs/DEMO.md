@@ -62,8 +62,9 @@ Alternatively, add a custom MCP server in *Settings → MCP* pointing at the sam
 image with the same three environment variables.
 
 Make sure the SonarQube project has a recent analysis of `main` (SonarCloud automatic
-analysis re-analyzes `main` on every push). The project key for this repo on SonarCloud
-is `dsalvadorjasin_devin-remediation-service`; it is used verbatim in the prompt below.
+analysis re-analyzes `main` on every push). In the prompt below, replace
+`<SONAR_PROJECT_KEY>` with the project key shown in SonarQube — on SonarCloud this repo's
+key is `dsalvadorjasin_devin-remediation-service`; a self-hosted server will have its own.
 
 ### 2. Automation prompt
 
@@ -75,7 +76,7 @@ You are the remediation step of a SonarQube -> Devin pipeline. SonarQube only re
 findings; you produce the fixes.
 
 1. Using the SonarQube MCP server (search_sonar_issues_in_projects), list OPEN issues
-   for project dsalvadorjasin_devin-remediation-service on branch `main`. Restrict to
+   for project <SONAR_PROJECT_KEY> on branch `main`. Restrict to
    files under `app/` (Python only) and ignore `frontend/`, `e2e/`, `alembic/versions/`,
    `k8s/`, Dockerfiles and `.github/workflows/`.
 2. Triage: pick at most 5 findings that are real and safely auto-fixable with a local,

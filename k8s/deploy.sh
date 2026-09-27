@@ -22,7 +22,7 @@ case "$IMAGE" in
   */*:*) NAME="${IMAGE%:*}"; REF="newTag: ${IMAGE##*:}" ;;
   *) echo "image-ref needs a registry path plus a tag or digest: $IMAGE" >&2; exit 2 ;;
 esac
-case "$REF" in "newTag: latest") echo "refusing ':latest'; use a unique tag or digest" >&2; exit 2 ;; esac
+case "$REF" in "newTag: latest") echo "refusing ':latest'; use a unique tag or digest" >&2; exit 2 ;; *) ;; esac
 
 # Overlay so namespace and image are set in one rendered manifest (kustomize
 # has no CLI flags for either); every kubectl call below uses the same NS.

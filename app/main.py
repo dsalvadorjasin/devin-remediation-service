@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         get_orchestrator().enqueue_scan(force_retry=False)
     except Exception as exc:
-        log.error("Could not enqueue startup scan: %s", exc)
+        log.exception("Could not enqueue startup scan: %s", exc)
     yield
     # Graceful shutdown: uvicorn has stopped accepting connections and awaited
     # in-flight requests by the time we get here; flush spans and drop pools.

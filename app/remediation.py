@@ -68,7 +68,7 @@ def _publish_poll(issue_number: int, session_id: str, delay_seconds: int, poll_t
     try:
         get_orchestrator().schedule_poll(issue_number, session_id, poll_token, delay_seconds)
     except Exception as exc:
-        log.error("Could not schedule poll for issue #%d: %s", issue_number, exc)
+        log.exception("Could not schedule poll for issue #%d: %s", issue_number, exc)
         store.release_poll(issue_number, poll_token=poll_token)
         return False
     return True
@@ -143,7 +143,7 @@ def process_issue(issue: dict, force_retry: bool = False) -> bool:
         except Exception as comment_exc:
             log.warning("Could not post comment on issue #%d: %s", number, comment_exc)
     except Exception as exc:
-        log.error("Failed to create Devin session for issue #%d: %s", number, exc)
+        log.exception("Failed to create Devin session for issue #%d: %s", number, exc)
         SESSION_CREATE_FAILURES.inc()
         REMEDIATION_OUTCOMES.labels(status="failed").inc()
         store.upsert(number, status="failed")
@@ -163,7 +163,7 @@ def scan_and_process(force_retry: bool = False) -> dict:
         with span("github.get_labeled_issues"):
             issues = github.get_labeled_issues()
     except Exception as exc:
-        log.error("Failed to fetch issues from GitHub: %s", exc)
+        log.exception("Failed to fetch issues from GitHub: %s", exc)
         return {"error": str(exc)}
 
     log.info("Found %d labeled issue(s)", len(issues))

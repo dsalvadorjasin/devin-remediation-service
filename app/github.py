@@ -82,7 +82,11 @@ def find_existing_pr(issue_number: int) -> str | None:
     needle = f"#{issue_number}"
     with http_client.client() as client:
         resp = http_client.request(
-            client, "GET", prs_url, headers=_headers(), params={"state": "open", "per_page": GITHUB_PAGE_SIZE}
+            client,
+            "GET",
+            prs_url,
+            headers=_headers(),
+            params={"state": "open", "per_page": GITHUB_PAGE_SIZE},
         )
     for pr in resp.json():
         title = pr.get("title", "")
@@ -144,7 +148,12 @@ def find_issues_by_fingerprint(
                 "GET",
                 url,
                 headers=_headers(),
-                params={"labels": LABEL, "state": "all", "per_page": GITHUB_PAGE_SIZE, "page": page},
+                params={
+                    "labels": LABEL,
+                    "state": "all",
+                    "per_page": GITHUB_PAGE_SIZE,
+                    "page": page,
+                },
             )
             issues = resp.json()
             for issue in issues:
@@ -167,7 +176,9 @@ def list_webhooks() -> list[dict]:
     """List repository webhooks (Webhooks: read)."""
     url = f"{GITHUB_API}/repos/{_repo()}/hooks"
     with http_client.client() as client:
-        resp = http_client.request(client, "GET", url, headers=_headers(), params={"per_page": GITHUB_PAGE_SIZE})
+        resp = http_client.request(
+            client, "GET", url, headers=_headers(), params={"per_page": GITHUB_PAGE_SIZE}
+        )
     return resp.json()
 
 

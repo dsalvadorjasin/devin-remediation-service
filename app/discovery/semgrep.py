@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from app.discovery.base import DiscoverySource, Finding
+from app.discovery.base import FINGERPRINT_WIDTH, DiscoverySource, Finding
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def parse_sarif(sarif: dict) -> list[Finding]:
             fp = ""
             for key in ("matchBasedId/v1", "primaryLocationLineHash", *sorted(fingerprints)):
                 if fingerprints.get(key):
-                    fp = str(fingerprints[key])[:32]
+                    fp = str(fingerprints[key])[:FINGERPRINT_WIDTH]
                     break
             findings.append(
                 Finding(

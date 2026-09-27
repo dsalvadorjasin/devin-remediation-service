@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 
 FINGERPRINT_MARKER = "semgrep-fingerprint"
+# Width of the dedup fingerprint, shared by computed and SARIF-provided fingerprints.
+FINGERPRINT_WIDTH = 32
 # Upper bound for SARIF documents accepted by /ingest/semgrep.
 MAX_SARIF_BYTES = 50 * 1024 * 1024
 MAX_MESSAGE_CHARS = 4000
@@ -63,7 +65,7 @@ class Finding:
         shifts above the finding don't create a duplicate issue."""
         bucket = self.start_line // 10
         raw = f"{self.rule_id}|{self.file_path}|{bucket}|{' '.join(self.snippet.split())}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:32]
+        return hashlib.sha256(raw.encode()).hexdigest()[:FINGERPRINT_WIDTH]
 
     @property
     def title(self) -> str:

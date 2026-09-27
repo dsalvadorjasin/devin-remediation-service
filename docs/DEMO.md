@@ -83,7 +83,9 @@ findings; you produce the fixes.
    edits. Do not touch `app/api/ingest.py`, existing tests, or GitHub workflows.
    For hardcoded credentials, read the value from an environment variable instead
    and do not commit any real secret.
-4. Run `uv run ruff check .` and `uv run pytest`; both must pass.
+4. Run `uv run ruff check .` and `uv run pytest`; both must pass. If ruff still fails
+   on `app/demo_helpers.py` for something the detector did not report, fix that too but
+   list it in the PR under "Not reported by the detector" so coverage gaps are visible.
 5. Open ONE pull request against `demo/seeded-issues` on a branch named
    `devin/sonar-fix-<short-description>`. In the PR description, list each SonarQube
    rule key you fixed (e.g. python:S1481) with the file/line and a one-line
@@ -115,7 +117,9 @@ reports findings; you produce the fixes.
    edits. Do not touch `app/api/ingest.py`, existing tests, or GitHub workflows.
    For hardcoded credentials, read the value from an environment variable instead
    and do not commit any real secret.
-4. Run `uv run ruff check .` and `uv run pytest`; both must pass.
+4. Run `uv run ruff check .` and `uv run pytest`; both must pass. If ruff still fails
+   on `app/demo_helpers.py` for something the detector did not report, fix that too but
+   list it in the PR under "Not reported by the detector" so coverage gaps are visible.
 5. Open ONE pull request against `demo/seeded-issues` on a branch named
    `devin/scan-fix-<short-description>`. In the PR description, list each finding you
    fixed with the file/line and a one-line explanation, and state that the findings
@@ -139,6 +143,14 @@ reports findings; you produce the fixes.
 The remediation half of the loop is the same in both legs; the trade-off is entirely
 about whether you want an external analyzer's ecosystem (dashboards, quality gates,
 existing rule sets) at the cost of running and authenticating against it.
+
+## Lint baseline on the seeded branch
+
+`app/demo_helpers.py` deliberately fails `uv run ruff check .` (F401 unused import, E722
+bare `except`), so CI lint is red on `demo/seeded-issues` until a remediation PR lands.
+Both prompts require green ruff before opening a PR; if a detector misses one of these,
+the session fixes it anyway and calls it out as "Not reported by the detector" — a useful
+data point for the comparison rather than a blocker.
 
 ## Expected outcome
 

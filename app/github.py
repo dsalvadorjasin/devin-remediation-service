@@ -16,6 +16,8 @@ from app import http_client
 
 GITHUB_API = "https://api.github.com"
 LABEL = "devin-remediate"
+# GitHub's maximum list page size; paginated loops stop on a short page.
+GITHUB_PAGE_SIZE = 100
 
 
 def _headers() -> dict:
@@ -39,12 +41,12 @@ def get_labeled_issues() -> list[dict]:
     page = 1
     with http_client.client() as client:
         while True:
-            params = {"labels": LABEL, "state": "open", "per_page": 100, "page": page}
+            params = {"labels": LABEL, "state": "open", "per_page": GITHUB_PAGE_SIZE, "page": page}
             resp = http_client.request(client, "GET", url, headers=_headers(), params=params)
             batch = resp.json()
             # Exclude pull requests (GitHub returns PRs as issues too)
             issues.extend(i for i in batch if "pull_request" not in i)
-            if len(batch) < 100:
+            if len(batch) < GITHUB_PAGE_SIZE:
                 return issues
             page += 1
 
@@ -66,7 +68,7 @@ def find_existing_pr(issue_number: int) -> str | None:
     timeline_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_number}/timeline"
     with http_client.client() as client:
         resp = http_client.request(
-            client, "GET", timeline_url, headers=_headers(), params={"per_page": 100}
+            client, "GET", timeline_url, headers=_headers(), params={"per_page": GITHUB_PAGE_SIZE}
         )
     for event in resp.json():
         if event.get("event") != "cross-referenced":
@@ -80,7 +82,7 @@ def find_existing_pr(issue_number: int) -> str | None:
     needle = f"#{issue_number}"
     with http_client.client() as client:
         resp = http_client.request(
-            client, "GET", prs_url, headers=_headers(), params={"state": "open", "per_page": 100}
+            client, "GET", prs_url, headers=_headers(), params={"state": "open", "per_page": GITHUB_PAGE_SIZE}
         )
     for pr in resp.json():
         title = pr.get("title", "")
@@ -99,6 +101,7 @@ def post_comment(issue_number: int, body: str) -> None:
 
 
 def get_issue(issue_number: int) -> dict:
+    """Fetch a single issue (Issues: read)."""
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}"
     with http_client.client() as client:
         resp = http_client.request(client, "GET", url, headers=_headers())
@@ -106,6 +109,7 @@ def get_issue(issue_number: int) -> dict:
 
 
 def add_labels(issue_number: int, labels: list[str]) -> None:
+    """Add labels to an issue (Issues: write)."""
     url = f"{GITHUB_API}/repos/{_repo()}/issues/{issue_number}/labels"
     with http_client.client() as client:
         http_client.request(client, "POST", url, headers=_headers(), json={"labels": labels})
@@ -140,7 +144,7 @@ def find_issues_by_fingerprint(
                 "GET",
                 url,
                 headers=_headers(),
-                params={"labels": LABEL, "state": "all", "per_page": 100, "page": page},
+                params={"labels": LABEL, "state": "all", "per_page": GITHUB_PAGE_SIZE, "page": page},
             )
             issues = resp.json()
             for issue in issues:
@@ -150,7 +154,7 @@ def find_issues_by_fingerprint(
                 for fp in wanted:
                     if f"<!-- {marker}: {fp} -->" in body:
                         found[fp] = issue
-            if len(issues) < 100:
+            if len(issues) < GITHUB_PAGE_SIZE:
                 break
             page += 1
     return found
@@ -160,9 +164,10 @@ def find_issues_by_fingerprint(
 
 
 def list_webhooks() -> list[dict]:
+    """List repository webhooks (Webhooks: read)."""
     url = f"{GITHUB_API}/repos/{_repo()}/hooks"
     with http_client.client() as client:
-        resp = http_client.request(client, "GET", url, headers=_headers(), params={"per_page": 100})
+        resp = http_client.request(client, "GET", url, headers=_headers(), params={"per_page": GITHUB_PAGE_SIZE})
     return resp.json()
 
 
@@ -188,6 +193,7 @@ def create_webhook(payload_url: str, secret: str, events: list[str] | None = Non
 
 
 def delete_webhook(hook_id: int) -> None:
+    """Delete a repository webhook by id (Webhooks: write)."""
     url = f"{GITHUB_API}/repos/{_repo()}/hooks/{hook_id}"
     with http_client.client() as client:
         http_client.request(client, "DELETE", url, headers=_headers())

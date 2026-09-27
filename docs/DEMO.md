@@ -102,6 +102,10 @@ analysis re-analyzes `main` on every push). On SonarCloud this repo's project ke
   3. Triage bugs/vulnerabilities first, then code smells; pick at most 5 small, local,
      behaviour-preserving fixes. Skip false positives and anything that changes
      behaviour or needs a design decision.
+     Before counting a finding, open the file on current `main` and confirm the
+     reported code is still there; findings already fixed by an earlier PR are listed
+     under Skipped as "already fixed on main" (neither detector marks findings
+     resolved immediately after a fix merges).
   4. Do not modify existing tests, workflow logic (pinning SHAs is fine) or
      `app/api/ingest.py`.
   5. `uv run ruff check .` and `uv run pytest` must pass.

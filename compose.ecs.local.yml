@@ -1,0 +1,180 @@
+# ECS runtime emulation overlay (Phase 1 of the self-managed -> ECS migration).
+# Layered on top of docker-compose.yml; see docs/ecs-local.md.
+#
+#   scripts/ecs-local-compose.sh up -d ...     # wrapper that passes -p/-f for you
+#   bash scripts/verify-ecs-local.sh           # full up -> RunTask -> e2e -> down
+#
+# What changes relative to plain compose:
+#   * every app container gets its env from the ECS task definition
+#     (ecs/taskdef/<task>.json) rendered to .ecs-local/env/<task>.env by
+#     scripts/ecs_local_env.py: plain `environment` + `secrets` resolved from
+#     Secrets Manager (LocalStack) - the operator's .env is NOT passed through;
+#   * ECS agent endpoints (task metadata v3 + task-role credentials) are served
+#     by amazon-ecs-local-container-endpoints at 169.254.170.2;
+#   * peers are reached by Service Connect / Cloud Map names (*.ecs.local);
+#   * no cross-service depends_on: ECS services start independently and are
+#     gated by health checks, and `migrate` is a one-shot RunTask
+#     (scripts/ecs-local-run-task.sh) run before the services are started.
+
+x-ecs-agent-env: &ecs-agent-env
+  # Injected by the ECS agent on Fargate.
+  AWS_EXECUTION_ENV: AWS_ECS_FARGATE
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  ECS_CONTAINER_METADATA_URI: http://169.254.170.2/v3
+  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: /creds
+  AWS_CONTAINER_CREDENTIALS_FULL_URI: http://169.254.170.2/creds
+
+x-ecs-task: &ecs-task
+  restart: unless-stopped
+  depends_on: !reset {}
+  environment: !override
+    <<: *ecs-agent-env
+
+services:
+  # --- ECS agent / AWS control-plane stand-ins -------------------------------
+
+  ecs-local-endpoints:
+    # Archived upstream (awslabs/amazon-ecs-local-container-endpoints); 1.4.2 is
+    # the final release. Pinned by digest.
+    image: amazon/amazon-ecs-local-container-endpoints:1.4.2-amd64@sha256:2f1be750a040f71540a1bca3c9fe3295030a022595a2fc8d3966623bd3f75bd2
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # The image's embedded Docker client defaults to API 1.27, which current
+      # daemons reject (minimum 1.40).
+      DOCKER_API_VERSION: "1.44"
+      # Credentials vended at /creds (the "task role"). Dummy values: the only
+      # AWS API in this stack is LocalStack, which accepts any key.
+      AWS_ACCESS_KEY_ID: ecs-local-task-role
+      AWS_SECRET_ACCESS_KEY: ecs-local-task-role-secret
+      AWS_SESSION_TOKEN: ecs-local-session-token
+      AWS_REGION: us-east-1
+    networks:
+      ecs-local-endpoints:
+        ipv4_address: 169.254.170.2
+
+  localstack:
+    # LocalStack Community (free tier): only Secrets Manager is enabled.
+    image: localstack/localstack:4@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
+    restart: unless-stopped
+    environment:
+      SERVICES: secretsmanager
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/10-seed-secrets.sh:ro
+      - ./.env:/seed/app.env:ro
+      - ./ecs.local.env:/seed/ecs.local.env:ro
+      - ./ecs:/ecs-defs:ro
+    healthcheck:
+      # Healthy only once the seed hook has run successfully.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/init/ready | grep -q '\"state\": \"SUCCESSFUL\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+
+  # --- Managed-service stand-ins (RDS / ElastiCache) -------------------------
+
+  postgres:
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [postgres.ecs.local]
+
+  redis:
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [redis.ecs.local]
+
+  # --- ECS tasks (ecs/taskdef/*.json) ----------------------------------------
+
+  migrate:
+    # One-shot task: `aws ecs run-task` with the api task definition and a
+    # command override. Only started by scripts/ecs-local-run-task.sh.
+    <<: *ecs-task
+    profiles: [run-task]
+    restart: "no"
+    env_file: !override
+      - path: .ecs-local/env/api.env
+        format: raw
+    networks: &ecs-task-networks
+      default: {}
+      ecs-local-endpoints: {}
+
+  api:
+    <<: *ecs-task
+    env_file: !override
+      - path: .ecs-local/env/api.env
+        format: raw
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    networks:
+      default:
+        aliases: [api.ecs.local]
+      ecs-local-endpoints: {}
+
+  ingest-worker:
+    <<: *ecs-task
+    env_file: !override
+      - path: .ecs-local/env/ingest-worker.env
+        format: raw
+    healthcheck: &celery-healthcheck
+      test: ["CMD-SHELL", "uv run celery -A app.celery_app:celery_app inspect ping -d ingest@$$HOSTNAME --timeout 10 || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 60s
+      start_interval: 5s
+    networks: *ecs-task-networks
+
+  devin-worker:
+    <<: *ecs-task
+    env_file: !override
+      - path: .ecs-local/env/devin-worker.env
+        format: raw
+    healthcheck:
+      <<: *celery-healthcheck
+      test: ["CMD-SHELL", "uv run celery -A app.celery_app:celery_app inspect ping -d devin@$$HOSTNAME --timeout 10 || exit 1"]
+    networks: *ecs-task-networks
+
+  beat:
+    # Singleton: ecs/service/beat.json runs desiredCount 1 with
+    # maximumPercent 100 / minimumHealthyPercent 0. Never scale this service.
+    <<: *ecs-task
+    env_file: !override
+      - path: .ecs-local/env/beat.env
+        format: raw
+    networks: *ecs-task-networks
+
+  frontend:
+    <<: *ecs-task
+    env_file: !override
+      - path: .ecs-local/env/frontend.env
+        format: raw
+    ports: !override
+      - "127.0.0.1:5173:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+    networks:
+      default:
+        aliases: [frontend.ecs.local]
+      ecs-local-endpoints: {}
+
+networks:
+  # Link-local network the ECS agent endpoints live on (169.254.170.2).
+  ecs-local-endpoints:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 169.254.170.0/24
+          gateway: 169.254.170.1

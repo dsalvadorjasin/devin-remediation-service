@@ -7,3 +7,7 @@ remediation.db
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+
+# ECS-local emulation (scripts/verify-ecs-local.sh)
+artifacts/
+.ecs-local/

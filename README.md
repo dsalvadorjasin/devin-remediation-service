@@ -168,6 +168,10 @@ DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run alembic upgrade 
 TEST_DATABASE_URL=postgresql+psycopg://u:pw@localhost:55432/t uv run pytest
 ```
 
+### Amazon ECS (Phase 1: local emulation)
+
+`ecs/taskdef/` and `ecs/service/` hold Fargate task and service definitions for `api`, `ingest-worker`, `devin-worker`, `beat` (singleton) and `frontend`, with sensitive values as Secrets Manager `secrets` references; [docs/ecs-mapping.md](docs/ecs-mapping.md) explains every compose → ECS decision. `bash scripts/verify-ecs-local.sh` runs them under ECS-like conditions without an AWS account (LocalStack Secrets Manager, ECS agent metadata/credentials endpoints, Service Connect names, migrate as a one-shot RunTask) and records a live-backend Playwright run into `artifacts/`; see [docs/ecs-local.md](docs/ecs-local.md).
+
 ### Kubernetes (optional)
 
 `k8s/` contains a kustomize base with the same topology: `remediation-api` (Deployment + Service + Ingress), `remediation-ingest-worker`, `remediation-devin-worker`, `remediation-beat` (replicas=1, `Recreate`), a `remediation-migrate` Job, plus `redis` and a `postgres` StatefulSet. Non-secret config lives in `configmap.yaml`. The `remediation-secrets` Secret is **not** part of the kustomize base (`secret.example.yaml` only documents the expected keys) and must be created out of band:

@@ -1,0 +1,65 @@
+{
+  "family": "devin-remediation-frontend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::000000000000:role/devin-remediation-task-execution",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "000000000000.dkr.ecr.us-east-1.amazonaws.com/devin-remediation-frontend:REPLACE_WITH_IMMUTABLE_TAG",
+      "essential": true,
+      "portMappings": [
+        {
+          "name": "frontend",
+          "containerPort": 80,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        {
+          "name": "API_UPSTREAM",
+          "value": "http://api.ecs.local:8000"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1/ || exit 1"
+        ],
+        "interval": 10,
+        "timeout": 3,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "stopTimeout": 10,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/devin-remediation/frontend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "frontend",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "frontend"
+    }
+  ]
+}

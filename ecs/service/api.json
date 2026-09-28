@@ -1,0 +1,73 @@
+{
+  "cluster": "devin-remediation",
+  "serviceName": "devin-remediation-api",
+  "taskDefinition": "devin-remediation-api",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-REPLACE_PRIVATE_A",
+        "subnet-REPLACE_PRIVATE_B"
+      ],
+      "securityGroups": [
+        "sg-REPLACE_API"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "serviceConnectConfiguration": {
+    "enabled": true,
+    "namespace": "ecs.local",
+    "services": [
+      {
+        "portName": "api",
+        "discoveryName": "api",
+        "clientAliases": [
+          {
+            "port": 8000,
+            "dnsName": "api.ecs.local"
+          }
+        ]
+      }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/devin-remediation/api-service-connect",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "api-service-connect",
+        "awslogs-create-group": "true"
+      }
+    }
+  },
+  "enableExecuteCommand": true,
+  "propagateTags": "TASK_DEFINITION",
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/devin-remediation-api/REPLACE",
+      "containerName": "api",
+      "containerPort": 8000
+    }
+  ],
+  "healthCheckGracePeriodSeconds": 30,
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "api"
+    }
+  ]
+}

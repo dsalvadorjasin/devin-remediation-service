@@ -1,0 +1,57 @@
+{
+  "cluster": "devin-remediation",
+  "serviceName": "devin-remediation-beat",
+  "taskDefinition": "devin-remediation-beat",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "maximumPercent": 100,
+    "minimumHealthyPercent": 0,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-REPLACE_PRIVATE_A",
+        "subnet-REPLACE_PRIVATE_B"
+      ],
+      "securityGroups": [
+        "sg-REPLACE_BEAT"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "serviceConnectConfiguration": {
+    "enabled": true,
+    "namespace": "ecs.local",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/devin-remediation/beat-service-connect",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "beat-service-connect",
+        "awslogs-create-group": "true"
+      }
+    }
+  },
+  "enableExecuteCommand": true,
+  "propagateTags": "TASK_DEFINITION",
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "beat"
+    },
+    {
+      "key": "scheduling",
+      "value": "singleton desiredCount=1 maximumPercent=100 minimumHealthyPercent=0 - never scale above 1"
+    }
+  ]
+}

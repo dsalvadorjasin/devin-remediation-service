@@ -1,0 +1,73 @@
+{
+  "cluster": "devin-remediation",
+  "serviceName": "devin-remediation-frontend",
+  "taskDefinition": "devin-remediation-frontend",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-REPLACE_PRIVATE_A",
+        "subnet-REPLACE_PRIVATE_B"
+      ],
+      "securityGroups": [
+        "sg-REPLACE_FRONTEND"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "serviceConnectConfiguration": {
+    "enabled": true,
+    "namespace": "ecs.local",
+    "services": [
+      {
+        "portName": "frontend",
+        "discoveryName": "frontend",
+        "clientAliases": [
+          {
+            "port": 80,
+            "dnsName": "frontend.ecs.local"
+          }
+        ]
+      }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/devin-remediation/frontend-service-connect",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "frontend-service-connect",
+        "awslogs-create-group": "true"
+      }
+    }
+  },
+  "enableExecuteCommand": true,
+  "propagateTags": "TASK_DEFINITION",
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/devin-remediation-frontend/REPLACE",
+      "containerName": "frontend",
+      "containerPort": 80
+    }
+  ],
+  "healthCheckGracePeriodSeconds": 30,
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "frontend"
+    }
+  ]
+}

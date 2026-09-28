@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const isCI = !!process.env.CI
+// Live-backend runs (scripts/verify-ecs-local.sh) must hit the already-running
+// frontend container on :5173, never a fresh Vite dev server.
+const isLive = !!process.env.E2E_LIVE_API
 
 export default defineConfig({
   testDir: './tests',
@@ -19,7 +22,7 @@ export default defineConfig({
   webServer: {
     command: 'npm --prefix ../frontend run dev -- --port 5173',
     url: 'http://localhost:5173',
-    reuseExistingServer: !isCI,
+    reuseExistingServer: !isCI || isLive,
     timeout: 60_000,
   },
 })

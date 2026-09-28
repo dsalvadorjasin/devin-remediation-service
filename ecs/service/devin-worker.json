@@ -1,0 +1,53 @@
+{
+  "cluster": "devin-remediation",
+  "serviceName": "devin-remediation-devin-worker",
+  "taskDefinition": "devin-remediation-devin-worker",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-REPLACE_PRIVATE_A",
+        "subnet-REPLACE_PRIVATE_B"
+      ],
+      "securityGroups": [
+        "sg-REPLACE_DEVIN_WORKER"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "serviceConnectConfiguration": {
+    "enabled": true,
+    "namespace": "ecs.local",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/devin-remediation/devin-worker-service-connect",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "devin-worker-service-connect",
+        "awslogs-create-group": "true"
+      }
+    }
+  },
+  "enableExecuteCommand": true,
+  "propagateTags": "TASK_DEFINITION",
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "devin-worker"
+    }
+  ]
+}

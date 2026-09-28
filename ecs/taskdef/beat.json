@@ -1,0 +1,121 @@
+{
+  "family": "devin-remediation-beat",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::000000000000:role/devin-remediation-task-execution",
+  "taskRoleArn": "arn:aws:iam::000000000000:role/devin-remediation-beat-task",
+  "containerDefinitions": [
+    {
+      "name": "beat",
+      "image": "000000000000.dkr.ecr.us-east-1.amazonaws.com/devin-remediation-service:REPLACE_WITH_IMMUTABLE_TAG",
+      "essential": true,
+      "command": [
+        "uv",
+        "run",
+        "celery",
+        "-A",
+        "app.celery_app:celery_app",
+        "beat",
+        "--loglevel=info"
+      ],
+      "environment": [
+        {
+          "name": "CELERY_BROKER_URL",
+          "value": "redis://REPLACE_WITH_ELASTICACHE_ENDPOINT:6379/0"
+        },
+        {
+          "name": "CELERY_RESULT_BACKEND",
+          "value": "redis://REPLACE_WITH_ELASTICACHE_ENDPOINT:6379/1"
+        },
+        {
+          "name": "CELERY_TASK_SOFT_TIME_LIMIT",
+          "value": "900"
+        },
+        {
+          "name": "CELERY_TASK_TIME_LIMIT",
+          "value": "1200"
+        },
+        {
+          "name": "GITHUB_REPO",
+          "value": "your-org/target-repo"
+        },
+        {
+          "name": "HTTP_CONNECT_TIMEOUT",
+          "value": "5"
+        },
+        {
+          "name": "HTTP_MAX_ATTEMPTS",
+          "value": "4"
+        },
+        {
+          "name": "HTTP_READ_TIMEOUT",
+          "value": "30"
+        },
+        {
+          "name": "LOG_FORMAT",
+          "value": "json"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "ORCHESTRATOR",
+          "value": "celery"
+        },
+        {
+          "name": "SCAN_INTERVAL_MINUTES",
+          "value": "5"
+        },
+        {
+          "name": "SEMGREP_CONFIG",
+          "value": "p/default"
+        },
+        {
+          "name": "SEMGREP_MAX_FINDINGS",
+          "value": "0"
+        },
+        {
+          "name": "SEMGREP_SCAN_INTERVAL_MINUTES",
+          "value": "60"
+        },
+        {
+          "name": "SERVICE_NAME",
+          "value": "remediation-beat"
+        },
+        {
+          "name": "UV_NO_SYNC",
+          "value": "1"
+        }
+      ],
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/devin-remediation/beat",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "beat",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "beat"
+    }
+  ]
+}

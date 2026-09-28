@@ -87,7 +87,7 @@ log "Shape-checking task + service definitions (botocore ECS model, offline)"
   | tee "$ARTIFACTS/ecs/definitions-validation.txt"
 
 log "Rendering task environments (taskdef environment + ecs.local.env; secrets by ARN from Secrets Manager)"
-python3 scripts/ecs_local_env.py --endpoint http://127.0.0.1:4566 | tee "$ARTIFACTS/ecs/task-env.txt"
+python3 scripts/ecs_local_env.py | tee "$ARTIFACTS/ecs/task-env.txt"
 
 log "RunTask: migrate"
 scripts/ecs-local-run-task.sh migrate | tee "$ARTIFACTS/ecs/run-task-migrate.txt"
@@ -152,8 +152,8 @@ log "Live dashboard e2e against the deployed frontend container (:5173)"
 INGEST_TOKEN_VALUE=$(sed -n 's/^INGEST_TOKEN=//p' .ecs-local/env/api.env)
 (
   cd e2e
-  [[ -d node_modules ]] || npm ci
-  npx playwright install chromium >/dev/null
-  E2E_LIVE_API=1 E2E_INGEST_TOKEN="$INGEST_TOKEN_VALUE" E2E_API_URL=http://localhost:8000 \
-    npx playwright test tests/dashboard.live.spec.ts
+  [[ -d node_modules ]] || npm ci --ignore-scripts
+  ./node_modules/.bin/playwright install chromium >/dev/null
+  E2E_LIVE_API=1 E2E_INGEST_TOKEN="$INGEST_TOKEN_VALUE" E2E_API_URL=http://127.0.0.1:8000 \
+    ./node_modules/.bin/playwright test tests/dashboard.live.spec.ts
 )

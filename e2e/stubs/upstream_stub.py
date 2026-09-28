@@ -19,6 +19,7 @@ Every request is recorded (time, host, method, path, status; never headers)
 and served at GET /__stub/requests.
 """
 
+import html
 import itertools
 import json
 import os
@@ -27,18 +28,19 @@ import secrets
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 CA_DIR = Path(os.getenv("STUB_CA_DIR", "/stub-ca"))
-WORK_DIR = Path(os.getenv("STUB_WORK_DIR", "/tmp/upstream-stub"))
 PORT = int(os.getenv("STUB_PORT", "443"))
 HOSTNAMES = ["api.github.com", "github.com", "api.devin.ai", "app.devin.ai"]
 FAIL_MARKER = "stub-devin-error"
 FIRST_ISSUE_NUMBER = 4201
+NOT_FOUND = "Not Found"
 
 _lock = threading.RLock()
 _issues: dict[tuple[str, int], dict] = {}
@@ -49,6 +51,7 @@ _requests: list[dict] = []
 
 REPO = r"/repos/(?P<owner>[^/]+)/(?P<name>[^/]+)"
 SESSIONS = r"/v3/organizations/(?P<org>[^/]+)/sessions"
+ISSUE = r"/issues/(?P<n>\d+)(?P<sub>/timeline|/comments|/labels)?"
 
 
 def _next_number(repo: str) -> int:
@@ -56,13 +59,13 @@ def _next_number(repo: str) -> int:
     return next(counter)
 
 
-def _generate_certs() -> None:
+def _generate_certs(work: Path) -> tuple[Path, Path]:
+    """Write the CA cert to CA_DIR and a server cert/key to `work`."""
     CA_DIR.mkdir(parents=True, exist_ok=True)
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
     (CA_DIR / "ready").unlink(missing_ok=True)
-    ca_key, ca_pem = WORK_DIR / "ca.key", CA_DIR / "ca.pem"
-    key, csr, crt = WORK_DIR / "server.key", WORK_DIR / "server.csr", WORK_DIR / "server.pem"
-    ext = WORK_DIR / "san.ext"
+    ca_key, ca_pem = work / "ca.key", CA_DIR / "ca.pem"
+    key, csr, crt = work / "server.key", work / "server.csr", work / "server.pem"
+    ext = work / "san.ext"
     ext.write_text(
         "basicConstraints=CA:FALSE\n"
         "keyUsage=digitalSignature,keyEncipherment\n"
@@ -117,6 +120,11 @@ def _generate_certs() -> None:
         "-out",
         str(crt),
     )
+    return crt, key
+
+
+def _html_url(repo: str, kind: str, number: int) -> str:
+    return f"https://github.com/{quote(repo, safe='/')}/{kind}/{number}"
 
 
 def _issue_view(repo: str, issue: dict) -> dict:
@@ -126,7 +134,7 @@ def _issue_view(repo: str, issue: dict) -> dict:
         "body": issue["body"],
         "state": issue["state"],
         "labels": [{"name": name} for name in issue["labels"]],
-        "html_url": f"https://github.com/{repo}/issues/{issue['number']}",
+        "html_url": _html_url(repo, "issues", issue["number"]),
     }
 
 
@@ -141,7 +149,7 @@ def _finish_session(session: dict) -> None:
         return
     number = session["issue_number"]
     pr_number = number + 1000
-    pr_url = f"https://github.com/{session['repo']}/pull/{pr_number}"
+    pr_url = _html_url(session["repo"], "pull", pr_number)
     session["status"] = "exit"
     session["pull_requests"] = [{"pr_url": pr_url}]
     _pulls.setdefault(session["repo"], []).append(
@@ -173,9 +181,9 @@ class Handler(BaseHTTPRequestHandler):
             _requests.append(
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "host": (self.headers.get("Host") or "").split(":")[0],
-                    "method": self.command,
-                    "path": urlsplit(self.path).path,
+                    "host": quote((self.headers.get("Host") or "").split(":")[0]),
+                    "method": quote(self.command),
+                    "path": quote(urlsplit(self.path).path),
                     "status": status,
                 }
             )
@@ -201,62 +209,64 @@ class Handler(BaseHTTPRequestHandler):
                 return self._github(path, query)
             if host == "api.devin.ai":
                 return self._devin(path)
-        return self._send(404, {"message": f"stub has no route for {host}"})
+        return self._send(404, {"message": "stub has no route for this host"})
 
     def _github(self, path: str, query: dict) -> None:
         m = re.fullmatch(REPO + r"(?P<rest>/.*)?", path)
         if not m:
-            return self._send(404, {"message": "Not Found"})
+            return self._send(404, {"message": NOT_FOUND})
         repo, rest = f"{m['owner']}/{m['name']}", m["rest"] or ""
-        page = int((query.get("page") or ["1"])[0])
-        if rest == "/issues" and self.command == "GET":
-            state = (query.get("state") or ["open"])[0]
-            wanted = set(filter(None, (query.get("labels") or [""])[0].split(",")))
-            rows = [
-                _issue_view(repo, i)
-                for (r, _), i in sorted(_issues.items())
-                if r == repo
-                and (state == "all" or i["state"] == state)
-                and wanted <= set(i["labels"])
-            ]
-            return self._send(200, rows if page == 1 else [])
-        if rest == "/issues" and self.command == "POST":
-            data = self._json_body()
-            number = _next_number(repo)
-            issue = {
-                "number": number,
-                "title": data.get("title", ""),
-                "body": data.get("body", ""),
-                "labels": list(data.get("labels") or []),
-                "state": "open",
-            }
-            _issues[(repo, number)] = issue
-            return self._send(201, _issue_view(repo, issue))
-        if rest == "/pulls" and self.command == "GET":
-            return self._send(200, list(_pulls.get(repo, [])) if page == 1 else [])
-        if rest == "/hooks":
-            return self._send(
-                200 if self.command == "GET" else 201, [] if self.command == "GET" else {"id": 1}
-            )
-        if re.fullmatch(r"/hooks/\d+", rest) and self.command == "DELETE":
+        first_page = (query.get("page") or ["1"])[0] == "1"
+        route = (self.command, rest)
+        if route == ("GET", "/issues"):
+            return self._send(200, _list_issues(repo, query) if first_page else [])
+        if route == ("POST", "/issues"):
+            return self._create_issue(repo)
+        if route == ("GET", "/pulls"):
+            return self._send(200, list(_pulls.get(repo, [])) if first_page else [])
+        if route == ("GET", "/hooks"):
+            return self._send(200, [])
+        if route == ("POST", "/hooks"):
+            return self._send(201, {"id": 1})
+        if self.command == "DELETE" and re.fullmatch(r"/hooks/\d+", rest):
             return self._send(204)
-        m = re.fullmatch(r"/issues/(?P<n>\d+)(?P<sub>/timeline|/comments|/labels)?", rest)
+        m = re.fullmatch(ISSUE, rest)
         if m:
-            issue = _issues.get((repo, int(m["n"])))
-            if issue is None:
-                return self._send(404, {"message": "Not Found"})
-            sub = m["sub"]
-            if sub is None and self.command == "GET":
-                return self._send(200, _issue_view(repo, issue))
-            if sub == "/timeline" and self.command == "GET":
-                return self._send(200, [])
-            if sub == "/comments" and self.command == "POST":
-                self._json_body()
-                return self._send(201, {"id": secrets.randbelow(10**9)})
-            if sub == "/labels" and self.command == "POST":
-                issue["labels"] += list(self._json_body().get("labels") or [])
-                return self._send(200, [{"name": n} for n in issue["labels"]])
-        return self._send(404, {"message": "Not Found"})
+            return self._issue_route(repo, int(m["n"]), m["sub"])
+        return self._send(404, {"message": NOT_FOUND})
+
+    def _create_issue(self, repo: str) -> None:
+        data = self._json_body()
+        number = _next_number(repo)
+        _issues[(repo, number)] = {
+            "number": number,
+            "title": data.get("title", ""),
+            "body": data.get("body", ""),
+            "labels": list(data.get("labels") or []),
+            "state": "open",
+        }
+        # The app only reads number/html_url from the create response.
+        return self._send(
+            201,
+            {"number": number, "state": "open", "html_url": _html_url(repo, "issues", number)},
+        )
+
+    def _issue_route(self, repo: str, number: int, sub: str | None) -> None:
+        issue = _issues.get((repo, number))
+        if issue is None:
+            return self._send(404, {"message": NOT_FOUND})
+        route = (self.command, sub)
+        if route == ("GET", None):
+            return self._send(200, _issue_view(repo, issue))
+        if route == ("GET", "/timeline"):
+            return self._send(200, [])
+        if route == ("POST", "/comments"):
+            self._json_body()
+            return self._send(201, {"id": secrets.randbelow(10**9)})
+        if route == ("POST", "/labels"):
+            issue["labels"] += list(self._json_body().get("labels") or [])
+            return self._send(200, [{"name": html.escape(n)} for n in issue["labels"]])
+        return self._send(404, {"message": NOT_FOUND})
 
     def _devin(self, path: str) -> None:
         if re.fullmatch(SESSIONS, path) and self.command == "POST":
@@ -282,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"detail": "session not found"})
             _finish_session(session)
             return self._send(200, _public_session(session))
-        return self._send(404, {"detail": "Not Found"})
+        return self._send(404, {"detail": NOT_FOUND})
 
     def do_GET(self) -> None:
         self._dispatch()
@@ -294,29 +304,43 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch()
 
 
+def _list_issues(repo: str, query: dict) -> list[dict]:
+    state = (query.get("state") or ["open"])[0]
+    wanted = set(filter(None, (query.get("labels") or [""])[0].split(",")))
+    return [
+        _issue_view(repo, issue)
+        for (r, _), issue in sorted(_issues.items())
+        if r == repo and state in ("all", issue["state"]) and wanted <= set(issue["labels"])
+    ]
+
+
 def _public_session(session: dict) -> dict:
     return {k: session[k] for k in ("session_id", "url", "status", "pull_requests")}
 
 
 class TLSThreadingHTTPServer(ThreadingHTTPServer):
-    """TLS handshake runs in the per-connection thread, so one slow or idle
-    client can never block accept() for everyone else."""
+    """The listening socket is TLS-wrapped with the handshake deferred to the
+    per-connection thread, so one slow or idle client can never block
+    accept() for everyone else."""
 
     daemon_threads = True
 
     def __init__(self, address, handler, ctx: ssl.SSLContext) -> None:
         super().__init__(address, handler)
-        self.ctx = ctx
+        self.socket = ctx.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
 
     def finish_request(self, request, client_address) -> None:
         request.settimeout(30)
-        super().finish_request(self.ctx.wrap_socket(request, server_side=True), client_address)
+        request.do_handshake()
+        super().finish_request(request, client_address)
 
 
 def main() -> None:
-    _generate_certs()
+    work = Path(tempfile.mkdtemp(prefix="upstream-stub-"))
+    cert, key = _generate_certs(work)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(WORK_DIR / "server.pem", WORK_DIR / "server.key")
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
     httpd = TLSThreadingHTTPServer(("0.0.0.0", PORT), Handler, ctx)
     (CA_DIR / "ready").write_text("ok\n")
     print(f"upstream stub listening on :{PORT} for {', '.join(HOSTNAMES)}", flush=True)

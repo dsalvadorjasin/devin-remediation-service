@@ -23,6 +23,9 @@ SECRETS=(
   "devin-org-id          DEVIN_ORG_ID          $APP_ENV"
 )
 
+# Unset in .env is valid for these (the app disables the feature).
+OPTIONAL=(GITHUB_WEBHOOK_SECRET)
+
 # Last assignment of KEY in a dotenv file; surrounding quotes stripped, no
 # shell evaluation of the value.
 read_key() {
@@ -54,7 +57,12 @@ done
 for entry in "${SECRETS[@]}"; do
   read -r name var file <<<"$entry"
   value=$(expand "$(read_key "$var" "$file")")
-  if [[ -z $value ]]; then
+  if [[ -z $value && " ${OPTIONAL[*]} " == *" $var "* ]]; then
+    # The task definition still references the secret, so it must exist; an
+    # unguessable value keeps the feature effectively disabled.
+    value=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+    echo "localstack-init: $var is empty; seeding a random value for $PREFIX/$name"
+  elif [[ -z $value ]]; then
     echo "localstack-init: $var is empty in $(basename "$file"); cannot seed $PREFIX/$name" >&2
     exit 1
   fi

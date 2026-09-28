@@ -13,12 +13,14 @@ Output: .ecs-local/env/<task>.env, one KEY=VALUE per line, consumed by
 compose.ecs.local.yml with `format: raw` (no interpolation). Secret values are
 never printed.
 
-    python3 scripts/ecs_local_env.py [--endpoint http://localhost:4566]
+    python3 scripts/ecs_local_env.py
+
+Inputs are fixed repo paths and the LocalStack port published by
+compose.ecs.local.yml; there are no CLI arguments.
 
 Stdlib only so it runs on the host without the project venv.
 """
 
-import argparse
 import json
 import re
 import sys
@@ -27,8 +29,12 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+DOTENV = ROOT / ".env"
+OVERRIDES = ROOT / "ecs.local.env"
+OUT_DIR = ROOT / ".ecs-local" / "env"
+LOCALSTACK_ENDPOINT = "http://127.0.0.1:4566"
 TASKDEF_DIR = ROOT / "ecs" / "taskdef"
-REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+REF = re.compile(r"\$\{([A-Za-z_]\w*)\}", re.ASCII)
 # LocalStack derives region/account from the credential scope; the signature
 # itself is not verified.
 AUTH = (
@@ -56,7 +62,7 @@ def expand(value: str, source: dict[str, str]) -> str:
     return REF.sub(lambda m: source.get(m.group(1), ""), value)
 
 
-def get_secret(endpoint: str, value_from: str) -> str:
+def get_secret(value_from: str) -> str:
     # valueFrom: arn:aws:secretsmanager:region:account:secret:name[:json-key:version-stage:version-id]
     parts = value_from.split(":")
     if len(parts) < 7 or parts[2] != "secretsmanager":
@@ -70,7 +76,7 @@ def get_secret(endpoint: str, value_from: str) -> str:
     if len(parts) > 9 and parts[9]:
         body["VersionId"] = parts[9]
     req = urllib.request.Request(
-        endpoint.rstrip("/") + "/",
+        LOCALSTACK_ENDPOINT + "/",
         data=json.dumps(body).encode(),
         headers={
             "Content-Type": "application/x-amz-json-1.1",
@@ -87,13 +93,13 @@ def get_secret(endpoint: str, value_from: str) -> str:
     return str(json.loads(secret)[json_key]) if json_key else secret
 
 
-def render(taskdef: dict, overrides: dict[str, str], endpoint: str) -> dict[str, str]:
+def render(taskdef: dict, overrides: dict[str, str]) -> dict[str, str]:
     (container,) = [c for c in taskdef["containerDefinitions"] if c.get("essential", True)]
     env = {
         e["name"]: overrides.get(e["name"], e["value"]) for e in container.get("environment", [])
     }
     for secret in container.get("secrets", []):
-        env[secret["name"]] = get_secret(endpoint, secret["valueFrom"])
+        env[secret["name"]] = get_secret(secret["valueFrom"])
     for key, value in env.items():
         if "\n" in value:
             raise ValueError(f"{key}: multi-line values are not supported in env files")
@@ -101,20 +107,13 @@ def render(taskdef: dict, overrides: dict[str, str], endpoint: str) -> dict[str,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    parser.add_argument("--endpoint", default="http://localhost:4566")
-    parser.add_argument("--dotenv", type=Path, default=ROOT / ".env")
-    parser.add_argument("--overrides", type=Path, default=ROOT / "ecs.local.env")
-    parser.add_argument("--out", type=Path, default=ROOT / ".ecs-local" / "env")
-    args = parser.parse_args()
-
-    dotenv = parse_dotenv(args.dotenv)
-    overrides = {k: expand(v, dotenv) for k, v in parse_dotenv(args.overrides).items()}
-    args.out.mkdir(parents=True, exist_ok=True)
+    dotenv = parse_dotenv(DOTENV)
+    overrides = {k: expand(v, dotenv) for k, v in parse_dotenv(OVERRIDES).items()}
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     for path in sorted(TASKDEF_DIR.glob("*.json")):
         taskdef = json.loads(path.read_text())
-        env = render(taskdef, overrides, args.endpoint)
-        target = args.out / f"{path.stem}.env"
+        env = render(taskdef, overrides)
+        target = OUT_DIR / f"{path.stem}.env"
         target.write_text("".join(f"{k}={v}\n" for k, v in sorted(env.items())))
         target.chmod(0o600)
         n_secrets = sum(len(c.get("secrets", [])) for c in taskdef["containerDefinitions"])

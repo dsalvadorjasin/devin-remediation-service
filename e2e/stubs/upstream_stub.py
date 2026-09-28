@@ -325,10 +325,6 @@ class TLSThreadingHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, address, handler, ctx: ssl.SSLContext) -> None:
-        super().__init__(address, handler)
-        self.socket = ctx.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
-
     def finish_request(self, request, client_address) -> None:
         request.settimeout(30)
         request.do_handshake()
@@ -341,7 +337,8 @@ def main() -> None:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert, key)
-    httpd = TLSThreadingHTTPServer(("0.0.0.0", PORT), Handler, ctx)
+    httpd = TLSThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True, do_handshake_on_connect=False)
     (CA_DIR / "ready").write_text("ok\n")
     print(f"upstream stub listening on :{PORT} for {', '.join(HOSTNAMES)}", flush=True)
     httpd.serve_forever()

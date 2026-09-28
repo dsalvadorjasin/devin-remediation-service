@@ -18,8 +18,15 @@ Both sets are plain AWS CLI input (`aws ecs register-task-definition
 --cli-input-json file://ecs/service/api.json`). `scripts/ecs_validate_defs.py`
 checks them against the botocore ECS model on every verify run. Account
 `000000000000` / region `us-east-1` match LocalStack's defaults so the secret
-ARNs resolve locally; `REPLACE_*` values (image tag, subnets, security groups,
-target groups, ElastiCache endpoint) are filled in per environment in Phase 2.
+ARNs resolve locally. In Phase 2 the account ID and region in every ARN, and the
+`REPLACE_*` values (image tag, subnets, security groups, target groups,
+ElastiCache endpoint), are filled in per environment at registration time — the
+definitions are not deployable to a real account unchanged.
+
+ECS resolves every `secrets` entry before starting a container, so
+`devin-remediation/github-webhook-secret` must exist even when webhooks are not
+used; provision a random value in that case (the API then rejects every
+webhook, same as when the variable is unset).
 
 ## Topology
 

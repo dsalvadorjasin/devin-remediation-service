@@ -46,7 +46,7 @@ scripts/ecs-local-compose.sh logs -f api
 | `compose.ecs.local.yml` | ECS runtime overlay on top of `docker-compose.yml` |
 | `compose.e2e-stubs.yml` | Test-only: GitHub/Devin stub on the real hostnames |
 | `ecs.local.env` | Local Service Connect names for `DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `API_UPSTREAM` |
-| `scripts/localstack-init.sh` | LocalStack ready hook: creates the `devin-remediation/*` secrets from `.env` |
+| `scripts/localstack-init.sh` | LocalStack ready hook: creates the `devin-remediation/*` secrets from `.env` (an unset `GITHUB_WEBHOOK_SECRET` gets a random value) |
 | `scripts/ecs_local_env.py` | Plays the ECS agent's env/secret injection |
 | `scripts/ecs_validate_defs.py` | Offline botocore shape check of `ecs/` |
 | `scripts/ecs-local-run-task.sh` | `aws ecs run-task` stand-in (wraps `docker compose run --rm migrate`) |
@@ -67,7 +67,7 @@ scripts/ecs-local-compose.sh logs -f api
 | Ordering | No `depends_on` (`!reset`); migrate is an explicit one-shot task; services gated by health checks | No cross-service ordering; `RunTask` in the pipeline; health checks + circuit breaker |
 | Restarts | `restart: unless-stopped` | Service scheduler replaces the *task* (new IP, fresh ephemeral storage) |
 | Beat singleton | One container; the verify script asserts one `beat` | `desiredCount 1`, `maximumPercent 100`, `minimumHealthyPercent 0` |
-| Ingress | Host ports 8000 / 5173 | ALB target groups, `awsvpc` ENIs |
+| Ingress | Host ports `127.0.0.1:8000` / `127.0.0.1:5173` | ALB target groups, `awsvpc` ENIs |
 | Logs | `docker compose logs` (JSON) | `awslogs` → CloudWatch Logs |
 | GitHub / Devin | TLS stub answering on `api.github.com` / `api.devin.ai` inside the Docker network; containers trust its CA via `SSL_CERT_FILE` | The real APIs over NAT egress |
 

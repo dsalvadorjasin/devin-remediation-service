@@ -1,0 +1,37 @@
+# Test-only overlay for the ECS-local live e2e run: replaces api.github.com /
+# api.devin.ai with e2e/stubs/upstream_stub.py inside the Docker network so
+# seeding findings through POST /ingest/semgrep never reaches real GitHub or
+# Devin. No application code changes: the stub answers on the real hostnames
+# (network aliases) over TLS, and app containers trust its throwaway CA.
+
+x-trust-stub-ca: &trust-stub-ca
+  environment:
+    SSL_CERT_FILE: /stub-ca/ca.pem
+  volumes:
+    - stub-ca:/stub-ca:ro
+
+services:
+  upstream-stub:
+    build: .
+    command: ["python", "/stub/upstream_stub.py"]
+    restart: unless-stopped
+    volumes:
+      - ./e2e/stubs:/stub:ro
+      - stub-ca:/stub-ca
+    networks:
+      default:
+        aliases: [api.github.com, github.com, api.devin.ai, app.devin.ai]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/stub-ca/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  migrate: *trust-stub-ca
+  api: *trust-stub-ca
+  ingest-worker: *trust-stub-ca
+  devin-worker: *trust-stub-ca
+  beat: *trust-stub-ca
+
+volumes:
+  stub-ca:

@@ -1,0 +1,160 @@
+{
+  "family": "devin-remediation-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::000000000000:role/devin-remediation-task-execution",
+  "taskRoleArn": "arn:aws:iam::000000000000:role/devin-remediation-api-task",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "000000000000.dkr.ecr.us-east-1.amazonaws.com/devin-remediation-service:REPLACE_WITH_IMMUTABLE_TAG",
+      "essential": true,
+      "command": [
+        "uv",
+        "run",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--timeout-graceful-shutdown",
+        "20"
+      ],
+      "portMappings": [
+        {
+          "name": "api",
+          "containerPort": 8000,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        {
+          "name": "CELERY_BROKER_URL",
+          "value": "redis://REPLACE_WITH_ELASTICACHE_ENDPOINT:6379/0"
+        },
+        {
+          "name": "CELERY_RESULT_BACKEND",
+          "value": "redis://REPLACE_WITH_ELASTICACHE_ENDPOINT:6379/1"
+        },
+        {
+          "name": "CELERY_TASK_SOFT_TIME_LIMIT",
+          "value": "900"
+        },
+        {
+          "name": "CELERY_TASK_TIME_LIMIT",
+          "value": "1200"
+        },
+        {
+          "name": "GITHUB_REPO",
+          "value": "your-org/target-repo"
+        },
+        {
+          "name": "HTTP_CONNECT_TIMEOUT",
+          "value": "5"
+        },
+        {
+          "name": "HTTP_MAX_ATTEMPTS",
+          "value": "4"
+        },
+        {
+          "name": "HTTP_READ_TIMEOUT",
+          "value": "30"
+        },
+        {
+          "name": "LOG_FORMAT",
+          "value": "json"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "ORCHESTRATOR",
+          "value": "celery"
+        },
+        {
+          "name": "SCAN_INTERVAL_MINUTES",
+          "value": "5"
+        },
+        {
+          "name": "SEMGREP_CONFIG",
+          "value": "p/default"
+        },
+        {
+          "name": "SEMGREP_MAX_FINDINGS",
+          "value": "0"
+        },
+        {
+          "name": "SEMGREP_SCAN_INTERVAL_MINUTES",
+          "value": "60"
+        },
+        {
+          "name": "SERVICE_NAME",
+          "value": "remediation-api"
+        },
+        {
+          "name": "UV_NO_SYNC",
+          "value": "1"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:000000000000:secret:devin-remediation/database-url"
+        },
+        {
+          "name": "GITHUB_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:000000000000:secret:devin-remediation/github-token"
+        },
+        {
+          "name": "GITHUB_WEBHOOK_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:000000000000:secret:devin-remediation/github-webhook-secret"
+        },
+        {
+          "name": "INGEST_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:000000000000:secret:devin-remediation/ingest-token"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/readyz')\""
+        ],
+        "interval": 10,
+        "timeout": 3,
+        "retries": 6,
+        "startPeriod": 20
+      },
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/devin-remediation/api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "app",
+      "value": "devin-remediation"
+    },
+    {
+      "key": "component",
+      "value": "api"
+    }
+  ]
+}

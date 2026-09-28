@@ -25,8 +25,9 @@ definitions are not deployable to a real account unchanged.
 
 ECS resolves every `secrets` entry before starting a container, so
 `devin-remediation/github-webhook-secret` must exist even when webhooks are not
-used; provision a random value in that case (the API then rejects every
-webhook, same as when the variable is unset).
+used; provision a random value in that case. Deliveries are then rejected with
+401 (invalid signature) instead of the 503 returned when the variable is unset,
+so alert on either status accordingly.
 
 ## Topology
 
